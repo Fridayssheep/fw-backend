@@ -15,9 +15,9 @@ DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NA
 engine = create_engine(DATABASE_URL)
 
 # 数据文件相对路径
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..', 'building-data-genome-project-2', 'data'))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
 METADATA_PATH = os.path.join(BASE_DIR, 'metadata', 'metadata.csv')
-CLEANED_METERS_PATTERN = os.path.join(BASE_DIR, 'meters', 'cleaned', '*.csv')
+CLEANED_METERS_PATTERN = os.path.join(BASE_DIR, 'cleaned', '*_cleaned.csv')
 
 def import_metadata():
     print("==== 开始导入建筑元数据 ====")
