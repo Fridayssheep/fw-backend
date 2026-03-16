@@ -1,0 +1,29 @@
+name: Python Lint (Ruff)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  lint:
+    name: Lint code with Ruff
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4    
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+      - name: Run Ruff Linter
+        run: |
+          # 检查整个项目下的所有 Python 文件
+          # --output-format=github 能在 GitHub 界面上的对应代码行直接显示警告
+          ruff check . --output-format=github
