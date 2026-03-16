@@ -1,0 +1,6 @@
+building-data-genome-project-2/*
+.DS_Store
+*.csv
+*.log
+*.sqlite
+*.db
