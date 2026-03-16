@@ -26,6 +26,3 @@ services:
       - "5050:80"
     depends_on:
       - db
-
-volumes:
-  pgdata:

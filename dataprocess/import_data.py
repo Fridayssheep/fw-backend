@@ -17,7 +17,7 @@ engine = create_engine(DATABASE_URL)
 # 数据文件相对路径
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
 METADATA_PATH = os.path.join(BASE_DIR, 'metadata', 'metadata.csv')
-CLEANED_METERS_PATTERN = os.path.join(BASE_DIR, 'cleaned', '*_cleaned.csv')
+CLEANED_DATA = os.path.join(BASE_DIR, 'cleaned', '*_cleaned.csv')
 
 def import_metadata():
     print("==== 开始导入建筑元数据 ====")
@@ -32,10 +32,10 @@ def import_metadata():
 
 def import_meter_data():
     print("==== 开始处理能耗数据 ====")
-    files = glob.glob(CLEANED_METERS_PATTERN)
+    files = glob.glob(CLEANED_DATA)
     
     if not files:
-        print(f"找不到任何清洗后的能耗数据文件，请检查路径: {CLEANED_METERS_PATTERN}")
+        print(f"找不到任何清洗后的能耗数据文件，请检查路径: {CLEANED_DATA}")
         return
         
     for file in files:
@@ -74,7 +74,7 @@ def import_meter_data():
         elapsed = time.time() - start_time
         print(f"  [{time.strftime('%H:%M:%S')}] [完成] {meter_type} 导入耗时: {elapsed:.2f} 秒.")
 
-    print("\n====所有数据导入完毕，建议随后在数据库中建立索引====")
+    print("\n====所有数据导入完毕====")
 
 if __name__ == "__main__":
     import_metadata()

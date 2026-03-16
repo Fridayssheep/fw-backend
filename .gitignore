@@ -62,3 +62,4 @@ building-data-genome-project-2/data/**/*.csv
 # Docker
 docker/pgdata/
 data/
+ragflow/
