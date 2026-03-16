@@ -20,7 +20,7 @@ METADATA_PATH = os.path.join(BASE_DIR, 'metadata', 'metadata.csv')
 CLEANED_METERS_PATTERN = os.path.join(BASE_DIR, 'meters', 'cleaned', '*.csv')
 
 def import_metadata():
-    print(f"==== 开始导入建筑元数据 ====")
+    print("==== 开始导入建筑元数据 ====")
     if not os.path.exists(METADATA_PATH):
         print(f"找不到 metadata 文件: {METADATA_PATH}")
         return
@@ -31,7 +31,7 @@ def import_metadata():
     print(f"[{time.strftime('%H:%M:%S')}] 成功导入了 {len(df_meta)} 条元数据记录！\n")
 
 def import_meter_data():
-    print(f"==== 开始处理能耗数据 ====")
+    print("==== 开始处理能耗数据 ====")
     files = glob.glob(CLEANED_METERS_PATTERN)
     
     if not files:

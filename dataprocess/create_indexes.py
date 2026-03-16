@@ -1,5 +1,4 @@
 import psycopg2
-from sqlalchemy import create_engine
 import time
 
 # 数据库连接配置
