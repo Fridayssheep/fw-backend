@@ -32,7 +32,11 @@ def create_indexes():
          
         # 元数据主键索引
         ("idx_metadata_building_id",
-         "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_metadata_building_id ON building_metadata (building_id);")
+         "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_metadata_building_id ON building_metadata (building_id);"),
+         
+        # 天气数据联合索引 (通过园区+时间联合查询)
+        ("idx_weather_site_time",
+         "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_weather_site_time ON weather_data (site_id, timestamp);")
     ]
     for index_name, query in index_queries:
         start_time = time.time()
