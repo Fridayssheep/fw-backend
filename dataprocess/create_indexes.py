@@ -1,12 +1,14 @@
-import psycopg2
+import os
 import time
 
+import psycopg2
+
 # 数据库连接配置
-DB_USER = 'admin'
-DB_PASSWORD = 'adminpassword'
-DB_HOST = 'localhost'
-DB_PORT = '5432'
-DB_NAME = 'building_energy'
+DB_USER = os.getenv('DB_USER', 'admin')
+DB_PASSWORD = os.getenv('DB_PASSWORD', 'adminpassword')
+DB_HOST = os.getenv('DB_HOST', '127.0.0.1')
+DB_PORT = os.getenv('DB_PORT', '15432')
+DB_NAME = os.getenv('DB_NAME', 'building_energy')
 
 def create_indexes():
     print("==== 开始为 PostgreSQL 数据库创建索引 ====")
@@ -25,6 +27,10 @@ def create_indexes():
         # 组合索引：针对最常见的查询 (某栋建筑的某种表在某个时间段的数据)
         ("idx_meters_building_meter_time", 
          "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_meters_building_meter_time ON meter_readings (building_id, meter, timestamp);"),
+
+        # 排行和对比查询更常按 meter + 时间过滤，再按 building_id 分组
+        ("idx_meters_meter_time_building",
+         "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_meters_meter_time_building ON meter_readings (meter, timestamp, building_id);"),
         
         # 单独的时间索引：针对全系统某个时段的总耗能查询
         ("idx_meters_time", 

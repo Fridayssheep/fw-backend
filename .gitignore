@@ -63,3 +63,9 @@ building-data-genome-project-2/data/**/*.csv
 docker/pgdata/
 data/
 ragflow/
+
+# doc
+*0.md
+
+# post test doc
+*.http
