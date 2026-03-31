@@ -1,0 +1,305 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AI Anomaly Feedback API",
+    "version": "0.1.0",
+    "description": "Single endpoint spec for anomaly diagnosis feedback."
+  },
+  "tags": [
+    {
+      "name": "AI"
+    }
+  ],
+  "paths": {
+    "/ai/anomaly-feedback": {
+      "post": {
+        "summary": "提交异常分析反馈",
+        "description": "用户在 AI 异常分析结果中选择最可能原因并打分，将本次确认结果沉淀为后续可检索的诊断经验。",
+        "operationId": "submitAnomalyFeedback",
+        "tags": [
+          "AI"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnomalyFeedbackRequest"
+              },
+              "example": {
+                "analysis_id": "ana_20260331_0001",
+                "building_id": "Bear_assembly_Angel",
+                "meter": "electricity",
+                "time_range": {
+                  "start": "2017-01-01T00:00:00+00:00",
+                  "end": "2017-01-07T00:00:00+00:00"
+                },
+                "selected_cause_id": "cooling_load_rise",
+                "selected_score": 5,
+                "candidate_feedbacks": [
+                  {
+                    "cause_id": "cooling_load_rise",
+                    "score": 5
+                  },
+                  {
+                    "cause_id": "efficiency_drop",
+                    "score": 3
+                  },
+                  {
+                    "cause_id": "meter_bias",
+                    "score": 1
+                  }
+                ],
+                "comment": "现场确认该时段冷负荷明显升高，优先按该方向排查。",
+                "operator_id": "user_001",
+                "operator_name": "张三",
+                "resolution_status": "confirmed"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "反馈提交成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnomalyFeedbackResponse"
+                },
+                "example": {
+                  "feedback_id": "feedback_20260331_0001",
+                  "analysis_id": "ana_20260331_0001",
+                  "stored": true,
+                  "message": "异常分析反馈已记录，可用于后续相似案例检索。",
+                  "selected_cause": {
+                    "cause_id": "cooling_load_rise",
+                    "title": "冷负荷异常升高",
+                    "score": 5
+                  },
+                  "meta": {
+                    "building_id": "Bear_assembly_Angel",
+                    "meter": "electricity",
+                    "resolution_status": "confirmed",
+                    "created_at": "2026-03-31T20:30:00+08:00"
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求参数不合法",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "TimeRange": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ]
+      },
+      "CandidateFeedbackItem": {
+        "type": "object",
+        "properties": {
+          "cause_id": {
+            "type": "string",
+            "description": "候选原因 ID，需与 /ai/analyze-anomaly 返回的 cause_id 一致"
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "用户对该候选原因的主观评分，1 为最低，5 为最高"
+          }
+        },
+        "required": [
+          "cause_id",
+          "score"
+        ]
+      },
+      "AnomalyFeedbackRequest": {
+        "type": "object",
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "description": "AI 异常分析唯一 ID"
+          },
+          "building_id": {
+            "type": "string",
+            "description": "建筑 ID"
+          },
+          "meter": {
+            "type": "string",
+            "description": "表计类型"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/TimeRange"
+          },
+          "selected_cause_id": {
+            "type": "string",
+            "description": "用户最终选择的最可能原因 ID"
+          },
+          "selected_score": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "用户对最终选择原因的评分"
+          },
+          "candidate_feedbacks": {
+            "type": "array",
+            "description": "可选。用户对多个候选原因逐项打分时提交",
+            "items": {
+              "$ref": "#/components/schemas/CandidateFeedbackItem"
+            }
+          },
+          "comment": {
+            "type": "string",
+            "description": "用户补充备注"
+          },
+          "operator_id": {
+            "type": "string",
+            "description": "提交反馈的用户 ID"
+          },
+          "operator_name": {
+            "type": "string",
+            "description": "提交反馈的用户名称"
+          },
+          "resolution_status": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "partially_confirmed",
+              "rejected",
+              "resolved"
+            ],
+            "description": "本次反馈状态"
+          }
+        },
+        "required": [
+          "analysis_id",
+          "building_id",
+          "meter",
+          "time_range",
+          "selected_cause_id",
+          "selected_score",
+          "resolution_status"
+        ]
+      },
+      "SelectedCauseSummary": {
+        "type": "object",
+        "properties": {
+          "cause_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          }
+        },
+        "required": [
+          "cause_id",
+          "title",
+          "score"
+        ]
+      },
+      "AnomalyFeedbackMeta": {
+        "type": "object",
+        "properties": {
+          "building_id": {
+            "type": "string"
+          },
+          "meter": {
+            "type": "string"
+          },
+          "resolution_status": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "building_id",
+          "meter",
+          "resolution_status",
+          "created_at"
+        ]
+      },
+      "AnomalyFeedbackResponse": {
+        "type": "object",
+        "properties": {
+          "feedback_id": {
+            "type": "string",
+            "description": "本次反馈记录唯一 ID"
+          },
+          "analysis_id": {
+            "type": "string",
+            "description": "对应的分析 ID"
+          },
+          "stored": {
+            "type": "boolean",
+            "description": "是否已成功落库"
+          },
+          "message": {
+            "type": "string"
+          },
+          "selected_cause": {
+            "$ref": "#/components/schemas/SelectedCauseSummary"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/AnomalyFeedbackMeta"
+          }
+        },
+        "required": [
+          "feedback_id",
+          "analysis_id",
+          "stored",
+          "message",
+          "selected_cause",
+          "meta"
+        ]
+      }
+    }
+  }
+}

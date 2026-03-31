@@ -248,3 +248,148 @@ class EnergyAnomalyAnalysisResponse(BaseModel):  # 定义异常分析响应模�
     detected_points: list[DetectedAnomalyPoint]  # 定义异常点列表字段。
     series: EnergySeries  # 定义用于分析的原始序列字段。
     weather_context: list[WeatherPoint] | None = None  # 定义天气上下文字段。
+
+class AIActionItem(BaseModel):
+    label: str
+    action_type: str
+    target: str
+    target_id: str | None = None
+
+
+class AIEvidenceItem(BaseModel):
+    evidence_id: str
+    type: str
+    source: str
+    snippet: str
+    weight: float | None = None
+
+
+class AICandidateCause(BaseModel):
+    cause_id: str
+    title: str
+    description: str
+    confidence: float
+    rank: int
+    recommended_checks: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class AIFeedbackPrompt(BaseModel):
+    enabled: bool = True
+    message: str
+    allow_score: bool = True
+    allow_comment: bool = True
+
+
+class AIAnalyzeAnomalyMeta(BaseModel):
+    building_id: str
+    meter: str
+    time_range: TimeRange
+    baseline_mode: str
+    generated_at: datetime
+    model: str
+    knowledge_hits: int = 0
+    history_feedback_hits: int = 0
+    used_fallback: bool = False
+
+
+class AIAnalyzeAnomalyRequest(BaseModel):
+    building_id: str
+    meter: str
+    time_range: TimeRange
+    granularity: str | None = "hour"
+    baseline_mode: str | None = "overall_mean"
+    include_weather_context: bool = False
+    question: str | None = None
+    include_history_feedback: bool = True
+    max_candidate_causes: int = 3
+
+
+class AIAnalyzeAnomalyResponse(BaseModel):
+    analysis_id: str
+    status: str
+    summary: str
+    answer: str
+    candidate_causes: list[AICandidateCause]
+    highlights: list[str] = Field(default_factory=list)
+    evidence: list[AIEvidenceItem] = Field(default_factory=list)
+    actions: list[AIActionItem] = Field(default_factory=list)
+    risk_notice: str
+    feedback_prompt: AIFeedbackPrompt
+    meta: AIAnalyzeAnomalyMeta
+
+
+class AIQueryIntent(BaseModel):
+    building_ids: list[str] = Field(default_factory=list)
+    site_id: str | None = None
+    meter: str | None = None
+    time_range: TimeRange | None = None
+    granularity: str | None = None
+    aggregation: str | None = None
+    metric: str | None = None
+    limit: int | None = None
+
+
+class AIQueryAssistantRequest(BaseModel):
+    question: str
+    current_time: datetime | None = None
+
+
+class AIQueryAssistantMeta(BaseModel):
+    generated_at: datetime
+    model: str
+    used_fallback: bool = False
+
+
+class AIQueryAssistantResponse(BaseModel):
+    summary: str
+    query_intent: AIQueryIntent
+    recommended_endpoint: str
+    recommended_http_method: str
+    recommended_query_params: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    meta: AIQueryAssistantMeta
+
+class CandidateFeedbackItem(BaseModel):
+    cause_id: str
+    score: int
+    title: str | None = None
+
+
+class SelectedCauseSummary(BaseModel):
+    cause_id: str
+    title: str
+    score: int
+
+
+class AnomalyFeedbackMeta(BaseModel):
+    building_id: str
+    meter: str
+    resolution_status: str
+    created_at: datetime
+
+
+class AnomalyFeedbackRequest(BaseModel):
+    analysis_id: str
+    building_id: str
+    meter: str
+    time_range: TimeRange
+    selected_cause_id: str
+    selected_score: int
+    selected_cause_title: str | None = None
+    candidate_feedbacks: list[CandidateFeedbackItem] = Field(default_factory=list)
+    comment: str | None = None
+    operator_id: str | None = None
+    operator_name: str | None = None
+    resolution_status: str
+    model_name: str | None = None
+    baseline_mode: str | None = None
+
+
+class AnomalyFeedbackResponse(BaseModel):
+    feedback_id: str
+    analysis_id: str
+    stored: bool
+    message: str
+    selected_cause: SelectedCauseSummary
+    meta: AnomalyFeedbackMeta

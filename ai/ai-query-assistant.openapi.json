@@ -1,0 +1,315 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Building Energy AI Query Assistant API",
+    "version": "0.1.0",
+    "description": "Standalone OpenAPI definition for the current /ai/query-assistant implementation."
+  },
+  "paths": {
+    "/ai/query-assistant": {
+      "post": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Parse query intent",
+        "description": "Parse a natural-language energy question into structured query intent and recommend the downstream energy endpoint. This endpoint does not execute the recommended query.",
+        "operationId": "aiQueryAssistant",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIQueryAssistantRequest"
+              },
+              "example": {
+                "question": "查 Bear_assembly_Angel 最近7天电耗趋势",
+                "current_time": "2026-04-01T10:00:00+08:00"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Structured query intent and downstream endpoint recommendation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIQueryAssistantResponse"
+                },
+                "example": {
+                  "summary": "已将问题解析为 /energy/trend 的查询意图。",
+                  "query_intent": {
+                    "building_ids": [
+                      "Bear_assembly_Angel"
+                    ],
+                    "site_id": null,
+                    "meter": "electricity",
+                    "time_range": {
+                      "start": "2026-03-25T10:00:00+08:00",
+                      "end": "2026-04-01T10:00:00+08:00"
+                    },
+                    "granularity": "day",
+                    "aggregation": null,
+                    "metric": null,
+                    "limit": null
+                  },
+                  "recommended_endpoint": "/energy/trend",
+                  "recommended_http_method": "GET",
+                  "recommended_query_params": {
+                    "building_ids": [
+                      "Bear_assembly_Angel"
+                    ],
+                    "meter": "electricity",
+                    "start_time": "2026-03-25T10:00:00+08:00",
+                    "end_time": "2026-04-01T10:00:00+08:00",
+                    "granularity": "day"
+                  },
+                  "warnings": [],
+                  "meta": {
+                    "generated_at": "2026-04-01T10:00:01+08:00",
+                    "model": "qwen3.5-plus",
+                    "used_fallback": false
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "code": "validation_error",
+                  "message": "非法请求参数"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "code": "internal_error",
+                  "message": "内部服务错误"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "TimeRange": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ]
+      },
+      "AIQueryIntent": {
+        "type": "object",
+        "properties": {
+          "building_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "site_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "meter": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "time_range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TimeRange"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "granularity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "aggregation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "metric": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "building_ids",
+          "site_id",
+          "meter",
+          "time_range",
+          "granularity",
+          "aggregation",
+          "metric",
+          "limit"
+        ]
+      },
+      "AIQueryAssistantRequest": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "Natural-language query question."
+          },
+          "current_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional current time override for relative-date parsing.",
+            "default": null
+          }
+        },
+        "required": [
+          "question"
+        ]
+      },
+      "AIQueryAssistantMeta": {
+        "type": "object",
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "model": {
+            "type": "string"
+          },
+          "used_fallback": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "generated_at",
+          "model",
+          "used_fallback"
+        ]
+      },
+      "AIQueryAssistantResponse": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "query_intent": {
+            "$ref": "#/components/schemas/AIQueryIntent"
+          },
+          "recommended_endpoint": {
+            "type": "string",
+            "enum": [
+              "/energy/query",
+              "/energy/trend",
+              "/energy/compare",
+              "/energy/rankings",
+              "/energy/weather-correlation",
+              "/energy/anomaly-analysis"
+            ]
+          },
+          "recommended_http_method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "POST"
+            ]
+          },
+          "recommended_query_params": {
+            "type": "object",
+            "additionalProperties": true,
+            "default": {}
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "meta": {
+            "$ref": "#/components/schemas/AIQueryAssistantMeta"
+          }
+        },
+        "required": [
+          "summary",
+          "query_intent",
+          "recommended_endpoint",
+          "recommended_http_method",
+          "recommended_query_params",
+          "warnings",
+          "meta"
+        ]
+      }
+    }
+  }
+}
