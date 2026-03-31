@@ -8,7 +8,7 @@ import time
 DB_USER = 'admin'
 DB_PASSWORD = 'adminpassword'
 DB_HOST = 'localhost'
-DB_PORT = '5432'
+DB_PORT = '15432'
 DB_NAME = 'building_energy'
 
 DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"

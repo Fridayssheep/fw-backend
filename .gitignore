@@ -66,6 +66,7 @@ ragflow/
 
 # doc
 *0.md
+*1.md
 
 # post test doc
 *.http

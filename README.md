@@ -3,6 +3,13 @@
 建筑能耗比赛演示版后端，当前已经实现：
 
 - `GET /health`
+- `GET /buildings`
+- `GET /buildings/{buildingId}`
+- `GET /buildings/{buildingId}/energy/summary`
+- `GET /devices`
+- `GET /devices/{deviceId}`
+- `GET /devices/{deviceId}/alarms`
+- `GET /devices/{deviceId}/maintenance-records`
 - `GET /energy/query`
 - `GET /energy/trend`
 - `GET /energy/compare`
@@ -31,7 +38,7 @@ uv pip install -r requirements.txt
 
 ### 3. 配置数据库环境变量
 
-如果数据库跑在 `docker-compose.yaml` 默认端口：
+如果数据库跑在你当前 Docker 容器映射端口：
 
 ```powershell
 $env:DB_HOST = "127.0.0.1"
@@ -44,19 +51,13 @@ $env:DB_PASSWORD = "adminpassword"
 ### 4. 启动后端
 
 ```powershell
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 启动后访问：
 
 - Swagger: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 - Health: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
-
-## 说明文档
-
-- [完整路由说明0.md](/C:/Users/DamingWang/Desktop/fw01/sheep/fw-backend/完整路由说明0.md)
-- [接口测试清单0.md](/C:/Users/DamingWang/Desktop/fw01/sheep/fw-backend/接口测试清单0.md)
-- [接口问题修复说明0.md](/C:/Users/DamingWang/Desktop/fw01/sheep/fw-backend/接口问题修复说明0.md)
 
 ## 当前技术栈
 
