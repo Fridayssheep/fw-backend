@@ -70,3 +70,8 @@ ragflow/
 
 # post test doc
 *.http
+
+# testfiles
+test/*.log
+test/*.json
+test/*report*
