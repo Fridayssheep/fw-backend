@@ -3,8 +3,14 @@ from fastapi import HTTPException
 
 from ai.backend.anomaly_service import analyze_anomaly_with_ai
 from ai.backend.feedback_service import submit_anomaly_feedback
+from ai.backend.qa_service import ask_ai_question
 from ai.backend.query_assistant_service import build_query_intent
-from ai.backend.ragflow_client import ragflow_client
+from ai.backend.ragflow_client import RagFlowAuthenticationError
+from ai.backend.ragflow_client import RagFlowConfigurationError
+from ai.backend.ragflow_client import RagFlowInvalidResponseError
+from ai.backend.ragflow_client import RagFlowNotFoundError
+from ai.backend.ragflow_client import RagFlowTimeoutError
+from ai.backend.ragflow_client import RagFlowUpstreamError
 
 from .schemas import AIAnalyzeAnomalyRequest
 from .schemas import AIAnalyzeAnomalyResponse
@@ -80,14 +86,15 @@ def ask_ai_question_api(payload: AIQARequest) -> AIQAResponse:
     直接对用户提出的问题进行检索增强生成（RAG），返回知识库中最相关的答案。
     支持会话级别的 session_id 用于维持上下文。
     """
-    result = ragflow_client.chat_completion(
-        question=payload.question,
-        session_id=payload.session_id
-    )
-    if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
-        
-    return AIQAResponse(
-        answer=result.get("answer", "No answer generated."),
-        session_id=result.get("session_id")
-    )
+    try:
+        return ask_ai_question(payload)
+    except RagFlowConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RagFlowAuthenticationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RagFlowNotFoundError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RagFlowTimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+    except (RagFlowUpstreamError, RagFlowInvalidResponseError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
