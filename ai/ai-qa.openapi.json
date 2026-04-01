@@ -1,0 +1,368 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Building Energy AI QA API",
+    "version": "0.2.0",
+    "description": "Standalone OpenAPI definition for the current /ai/qa implementation. The endpoint uses a two-stage flow: RAGFlow retrieval for references and RAGFlow chats_openai for answer generation."
+  },
+  "tags": [
+    {
+      "name": "AI"
+    }
+  ],
+  "paths": {
+    "/ai/qa": {
+      "post": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "通用知识/运维库 AI 问答",
+        "description": "针对建筑运维知识库执行问答。后端先通过 RAGFlow retrieval 获取结构化引用，再通过 RAGFlow chats_openai 生成自然语言答案。响应中的 references 为轻量展示版，主要供前端显示引用卡片，不应用于向其他 AI 继续拼接大上下文。",
+        "operationId": "askAiQuestion",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIQARequest"
+              },
+              "example": {
+                "question": "SLS单级单吸离心泵在正常工作时，对环境温度、海拔高度和相对湿度有什么具体要求？",
+                "session_id": null
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "问答成功，返回答案与轻量引用。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIQAResponse"
+                },
+                "example": {
+                  "answer": "知识库中明确提到：周围环境温度不超过40℃，相对湿度不超过95%，海拔高度不高于1000m。",
+                  "session_id": null,
+                  "references": {
+                    "chunks": [
+                      {
+                        "chunk_id": "514aac2b96dab8ca",
+                        "document_id": "8fbe3ccc2b8511f186af3b6dbbaea58b",
+                        "document_name": "SLS单级单吸离心泵.pdf",
+                        "dataset_id": "1b21a2082a8311f1864a971605e1c2d0",
+                        "content": "3、周围环境温度不超过40℃，相对湿度不超过95%。3.No larger than 40℃ of the ambient temperature, no higher than 1000m of the above-sea level and no more than 95% of the relative humidity.",
+                        "similarity": 0.3324,
+                        "metadata": {
+                          "doc_type_kwd": "",
+                          "image_id": "1b21a2082a8311f1864a971605e1c2d0-514aac2b96dab8ca",
+                          "positions": [
+                            [
+                              3,
+                              636,
+                              879,
+                              224,
+                              240
+                            ]
+                          ]
+                        }
+                      }
+                    ],
+                    "doc_aggs": [
+                      {
+                        "document_id": "8fbe3ccc2b8511f186af3b6dbbaea58b",
+                        "document_name": "SLS单级单吸离心泵.pdf",
+                        "count": 5
+                      }
+                    ]
+                  },
+                  "meta": {
+                    "provider": "ragflow",
+                    "chat_id": "ea44b4242d9b11f180683fca53910d59",
+                    "used_openai_compatible": true
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "请求参数校验失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPExceptionDetail"
+                },
+                "example": {
+                  "detail": [
+                    {
+                      "type": "missing",
+                      "loc": [
+                        "body",
+                        "question"
+                      ],
+                      "msg": "Field required",
+                      "input": {}
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "RAGFlow 鉴权失败、资源不存在或上游返回非法结构",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPExceptionDetail"
+                },
+                "example": {
+                  "detail": "RAGFlow 上游服务异常: HTTP 500。"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "RAGFlow 配置缺失",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPExceptionDetail"
+                },
+                "example": {
+                  "detail": "RAGFlow API key 未配置。"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "RAGFlow 请求超时",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPExceptionDetail"
+                },
+                "example": {
+                  "detail": "RAGFlow 请求超时。"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AIQARequest": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "用户提出的问题。"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "可选的会话 ID。当前后端保留该字段，但上游 RAGFlow 官方 chats_openai 文档未明确保证会话续接语义。",
+            "default": null
+          }
+        },
+        "required": [
+          "question"
+        ]
+      },
+      "AIQAReferenceChunk": {
+        "type": "object",
+        "properties": {
+          "chunk_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "知识片段 ID。"
+          },
+          "document_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "文档 ID。"
+          },
+          "document_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "文档名称。"
+          },
+          "dataset_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "知识库 ID。"
+          },
+          "content": {
+            "type": "string",
+            "description": "裁剪后的引用片段内容，当前最长约 600 字。"
+          },
+          "similarity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "检索相似度分数。"
+          },
+          "metadata": {
+            "type": "object",
+            "description": "仅保留给前端展示有价值的少量元数据。",
+            "additionalProperties": true,
+            "default": {}
+          }
+        },
+        "required": [
+          "chunk_id",
+          "document_id",
+          "document_name",
+          "dataset_id",
+          "content",
+          "similarity",
+          "metadata"
+        ]
+      },
+      "AIQAReferenceDocAgg": {
+        "type": "object",
+        "properties": {
+          "document_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "document_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "命中的片段数量。"
+          }
+        },
+        "required": [
+          "document_id",
+          "document_name",
+          "count"
+        ]
+      },
+      "AIQAReference": {
+        "type": "object",
+        "properties": {
+          "chunks": {
+            "type": "array",
+            "description": "轻量引用片段列表，当前最多返回 5 条。",
+            "items": {
+              "$ref": "#/components/schemas/AIQAReferenceChunk"
+            },
+            "default": []
+          },
+          "doc_aggs": {
+            "type": "array",
+            "description": "按文档聚合的命中信息，当前最多返回 5 条。",
+            "items": {
+              "$ref": "#/components/schemas/AIQAReferenceDocAgg"
+            },
+            "default": []
+          }
+        },
+        "required": [
+          "chunks",
+          "doc_aggs"
+        ]
+      },
+      "AIQAMeta": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "上游知识问答服务提供方。"
+          },
+          "chat_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "当前使用的 RAGFlow Chat ID。"
+          },
+          "used_openai_compatible": {
+            "type": "boolean",
+            "description": "是否通过 RAGFlow OpenAI-compatible 聊天接口生成答案。",
+            "default": true
+          }
+        },
+        "required": [
+          "provider",
+          "chat_id",
+          "used_openai_compatible"
+        ]
+      },
+      "AIQAResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "AI 生成的回答。"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "当前会话 ID。若上游未返回，则可能为 null。"
+          },
+          "references": {
+            "$ref": "#/components/schemas/AIQAReference"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/AIQAMeta"
+          }
+        },
+        "required": [
+          "answer",
+          "session_id",
+          "references",
+          "meta"
+        ]
+      },
+      "HTTPExceptionDetail": {
+        "type": "object",
+        "properties": {
+          "detail": {
+            "description": "FastAPI/HTTPException 返回的 detail 字段。可能是字符串，也可能是校验错误数组。",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            ]
+          }
+        },
+        "required": [
+          "detail"
+        ]
+      }
+    }
+  }
+}

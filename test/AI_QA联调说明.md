@@ -5,7 +5,7 @@
 这份联调用于验证三件事：
 
 1. 后端 `/ai/qa` 路由是否可访问
-2. 后端是否能正确调用 RAGFlow OpenAI-compatible 聊天接口
+2. 后端是否能正确执行 retrieval + OpenAI-compatible chat 双阶段
 3. 返回中是否包含：
    - `answer`
    - `session_id`
@@ -25,6 +25,7 @@ $env:BACKEND_BASE_URL=''
 $env:RAGFLOW_API_URL=''
 $env:RAGFLOW_API_KEY=''
 $env:RAGFLOW_DEFAULT_CHAT_ID=''
+$env:RAGFLOW_DATASET_IDS=''
 $env:AI_QA_TEST_QUESTION=''
 $env:AI_QA_TEST_SESSION_ID=''
 $env:AI_QA_DIRECT_RAGFLOW_CHECK='1'
@@ -40,6 +41,9 @@ $env:AI_QA_DIRECT_RAGFLOW_CHECK='1'
   - RAGFlow 的 API Key
 - `RAGFLOW_DEFAULT_CHAT_ID`
   - 用于 `/ai/qa` 的目标 Chat ID
+- `RAGFLOW_DATASET_IDS`
+  - retrieval 阶段要检索的知识库 ID，多个值用英文逗号分隔
+  - 如果不填，`/ai/qa` 仍可能正常回答，但大概率拿不到稳定的结构化引用
 - `AI_QA_TEST_QUESTION`
   - 例如：`冷机报警先查什么？`
 - `AI_QA_TEST_SESSION_ID`
@@ -87,7 +91,7 @@ D:\code\服外\fw-backend\test\ai_qa_integration_report.json
 
 - `503`
   - RAGFlow 配置缺失
-  - 常见是 `RAGFLOW_API_KEY` 或 `RAGFLOW_DEFAULT_CHAT_ID` 没填
+  - 常见是 `RAGFLOW_API_KEY`、`RAGFLOW_DEFAULT_CHAT_ID` 或 `RAGFLOW_DATASET_IDS` 没填
 
 - `502`
   - RAGFlow 鉴权失败
@@ -102,7 +106,7 @@ D:\code\服外\fw-backend\test\ai_qa_integration_report.json
 ## 6. 推荐排查顺序
 
 1. 先看 `direct_ragflow_check`
-   - 如果这里就失败，优先检查 RAGFlow 地址、API Key、Chat ID
+   - 如果这里就失败，优先检查 RAGFlow 地址、API Key、Chat ID、Dataset IDs
 2. 再看 `backend_http_check`
    - 如果直连成功但后端失败，说明问题在后端路由、service 或响应适配
 
@@ -112,7 +116,8 @@ D:\code\服外\fw-backend\test\ai_qa_integration_report.json
 
 已覆盖：
 
-- RAGFlow 直连检查
+- RAGFlow retrieval 直连检查
+- RAGFlow chats_openai 直连检查
 - `/ai/qa` HTTP 联调
 - 返回引用数量统计
 

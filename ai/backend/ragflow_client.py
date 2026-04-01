@@ -143,26 +143,105 @@ class RagFlowClient:
             "doc_aggs": normalized_doc_aggs,
         }
 
-    def retrieve_chunks(
+    def _normalize_retrieval_chunk(self, raw_chunk: dict[str, Any]) -> dict[str, Any]:
+        """把 retrieval 接口返回的原始 chunk 统一成 /ai/qa 可直接使用的结构。
+
+        这里会保留 metadata 原文，避免后续页面或调试时丢失 RAGFlow 原始字段。
+        """
+
+        similarity = (
+            raw_chunk.get("similarity")
+            or raw_chunk.get("vector_similarity")
+            or raw_chunk.get("term_similarity")
+            or raw_chunk.get("score")
+        )
+        try:
+            similarity_value = float(similarity) if similarity is not None else None
+        except (TypeError, ValueError):
+            similarity_value = None
+
+        return {
+            "chunk_id": raw_chunk.get("chunk_id") or raw_chunk.get("id"),
+            "document_id": raw_chunk.get("document_id") or raw_chunk.get("doc_id"),
+            "document_name": raw_chunk.get("document_name") or raw_chunk.get("document_keyword") or raw_chunk.get("doc_name"),
+            "dataset_id": raw_chunk.get("dataset_id") or raw_chunk.get("kb_id"),
+            "content": raw_chunk.get("content") or raw_chunk.get("snippet") or raw_chunk.get("text") or "",
+            "similarity": similarity_value,
+            "metadata": raw_chunk,
+        }
+
+    def _normalize_retrieval_doc_aggs(self, raw_doc_aggs: Any) -> list[dict[str, Any]]:
+        """按 retrieval 文档格式解析 doc_aggs。
+
+        retrieval 文档当前示例返回的是 list，历史版本也可能出现 dict。
+        这里保持兼容，但优先遵循官方字段名 `doc_id` / `doc_name` / `count`。
+        """
+
+        if isinstance(raw_doc_aggs, list):
+            doc_agg_items = [item for item in raw_doc_aggs if isinstance(item, dict)]
+        elif isinstance(raw_doc_aggs, dict):
+            doc_agg_items = [item for item in raw_doc_aggs.values() if isinstance(item, dict)]
+        else:
+            doc_agg_items = []
+
+        normalized_doc_aggs: list[dict[str, Any]] = []
+        for item in doc_agg_items:
+            count = item.get("count")
+            try:
+                normalized_count = int(count) if count is not None else None
+            except (TypeError, ValueError):
+                normalized_count = None
+
+            normalized_doc_aggs.append(
+                {
+                    "document_id": item.get("document_id") or item.get("doc_id"),
+                    "document_name": item.get("document_name") or item.get("doc_name") or item.get("name"),
+                    "count": normalized_count,
+                }
+            )
+        return normalized_doc_aggs
+
+    def _build_doc_aggs_from_chunks(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """根据 chunk 列表汇总出文档级命中信息。"""
+
+        doc_stats: dict[tuple[str | None, str | None], dict[str, Any]] = {}
+        for chunk in chunks:
+            document_id = chunk.get("document_id")
+            document_name = chunk.get("document_name")
+            doc_key = (document_id, document_name)
+            if doc_key not in doc_stats:
+                doc_stats[doc_key] = {
+                    "document_id": document_id,
+                    "document_name": document_name,
+                    "count": 0,
+                }
+            doc_stats[doc_key]["count"] += 1
+
+        return sorted(
+            doc_stats.values(),
+            key=lambda item: (
+                -(item.get("count") or 0),
+                item.get("document_name") or "",
+                item.get("document_id") or "",
+            ),
+        )
+
+    def retrieve_references(
         self,
         question: str,
         dataset_ids: list[str] | None = None,
-        top_k: int = 3,
-    ) -> list[dict[str, Any]]:
-        """从 RAGFlow 知识库检索相关片段。
-
-        这条链路用于异常分析和 MCP，当前保持软失败：
-        只要知识库暂时不可用，就返回空列表，不阻断主分析流程。
-        """
+        top_k: int = 5,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """从 RAGFlow retrieval 接口获取稳定的结构化引用。"""
 
         if not self.api_key:
-            logger.warning("RAGFlow API key 未配置，retrieve_chunks 直接返回空列表。")
-            return []
+            logger.warning("RAGFlow API key 未配置，retrieve_references 直接返回空引用。")
+            return {"chunks": [], "doc_aggs": []}
 
         datasets = dataset_ids or list(self._settings.ragflow_dataset_ids)
         if not datasets:
-            logger.warning("RAGFlow dataset_ids 未配置，retrieve_chunks 直接返回空列表。")
-            return []
+            logger.warning("RAGFlow dataset_ids 未配置，retrieve_references 直接返回空引用。")
+            return {"chunks": [], "doc_aggs": []}
 
         url = f"{self.api_url}/retrieval"
         payload = {
@@ -176,14 +255,47 @@ class RagFlowClient:
             body = self._request_json(url, payload)
         except RagFlowError as exc:
             logger.exception("RAGFlow retrieval 调用失败: %s", exc)
-            return []
+            return {"chunks": [], "doc_aggs": []}
 
         if body.get("code") == 0 and isinstance(body.get("data"), dict):
-            chunks = body["data"].get("chunks", [])
-            return chunks if isinstance(chunks, list) else []
+            raw_chunks = body["data"].get("chunks", [])
+            if not isinstance(raw_chunks, list):
+                logger.error("RAGFlow retrieval chunks 字段不是 list: %s", body)
+                return {"chunks": [], "doc_aggs": []}
+
+            normalized_chunks = [
+                self._normalize_retrieval_chunk(item)
+                for item in raw_chunks
+                if isinstance(item, dict)
+            ]
+            normalized_doc_aggs = self._normalize_retrieval_doc_aggs(body["data"].get("doc_aggs"))
+            return {
+                "chunks": normalized_chunks,
+                # 优先使用 retrieval 官方返回的 doc_aggs；只有上游没给时才本地回退聚合。
+                "doc_aggs": normalized_doc_aggs or self._build_doc_aggs_from_chunks(normalized_chunks),
+            }
 
         logger.error("RAGFlow retrieval 返回了非预期结构: %s", body)
-        return []
+        return {"chunks": [], "doc_aggs": []}
+
+    def retrieve_chunks(
+        self,
+        question: str,
+        dataset_ids: list[str] | None = None,
+        top_k: int = 3,
+    ) -> list[dict[str, Any]]:
+        """从 RAGFlow 知识库检索相关片段。
+
+        这里直接复用统一的 retrieval 规范化逻辑，确保 MCP、异常分析、/ai/qa
+        看到的 chunk 字段尽量一致。
+        """
+
+        references = self.retrieve_references(
+            question=question,
+            dataset_ids=dataset_ids,
+            top_k=top_k,
+        )
+        return references.get("chunks", [])
 
     def chat_completion(
         self,
@@ -209,16 +321,9 @@ class RagFlowClient:
                 }
             ],
             "stream": False,
-            # RAGFlow 的 chats_openai 接口要求把引用开关放进 extra_body。
-            # 如果直接放顶层，聊天能回答，但大概率拿不到 reference。
-            "extra_body": {
-                "reference": True,
-            },
         }
         if session_id:
-            # 文档没有强调 session_id 的固定位置，但当前继续透传，
-            # 便于兼容服务端已有的会话能力。
-            payload["session_id"] = session_id
+            logger.warning("RAGFlow chats_openai 官方文档未声明 session_id 请求参数，当前忽略传入的 session_id。")
 
         body = self._request_json(url, payload)
 
@@ -229,7 +334,7 @@ class RagFlowClient:
                 raise RagFlowInvalidResponseError("RAGFlow 聊天返回缺少 answer 内容。")
             return {
                 "answer": answer,
-                "session_id": body.get("session_id") or body.get("conversation_id") or body.get("id") or session_id,
+                "session_id": body.get("session_id") or body.get("conversation_id"),
                 "references": self._normalize_reference(message.get("reference") or body.get("reference")),
                 "raw": body,
             }

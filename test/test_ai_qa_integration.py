@@ -40,16 +40,22 @@ def direct_ragflow_check() -> dict[str, Any]:
     session_id = os.getenv("AI_QA_TEST_SESSION_ID", "").strip() or None
 
     client = RagFlowClient(api_url=ragflow_api_url, api_key=ragflow_api_key)
-    result = client.chat_completion(
+    retrieval_result = client.retrieve_references(
+        question=question,
+        top_k=5,
+    )
+    chat_result = client.chat_completion(
         question=question,
         chat_id=chat_id,
         session_id=session_id,
     )
     return {
-        "answer_preview": (result.get("answer") or "")[:200],
-        "session_id": result.get("session_id"),
-        "reference_chunk_count": len((result.get("references") or {}).get("chunks", [])),
-        "reference_doc_count": len((result.get("references") or {}).get("doc_aggs", [])),
+        "answer_preview": (chat_result.get("answer") or "")[:200],
+        "session_id": chat_result.get("session_id"),
+        "retrieval_reference_chunk_count": len((retrieval_result or {}).get("chunks", [])),
+        "retrieval_reference_doc_count": len((retrieval_result or {}).get("doc_aggs", [])),
+        "chat_reference_chunk_count": len((chat_result.get("references") or {}).get("chunks", [])),
+        "chat_reference_doc_count": len((chat_result.get("references") or {}).get("doc_aggs", [])),
     }
 
 
@@ -100,6 +106,7 @@ def main() -> None:
             "BACKEND_BASE_URL": os.getenv("BACKEND_BASE_URL", ""),
             "RAGFLOW_API_URL": os.getenv("RAGFLOW_API_URL", ""),
             "RAGFLOW_DEFAULT_CHAT_ID": os.getenv("RAGFLOW_DEFAULT_CHAT_ID", ""),
+            "RAGFLOW_DATASET_IDS": os.getenv("RAGFLOW_DATASET_IDS", ""),
             "AI_QA_TEST_QUESTION": os.getenv("AI_QA_TEST_QUESTION", ""),
             "AI_QA_TEST_SESSION_ID": os.getenv("AI_QA_TEST_SESSION_ID", ""),
             "AI_QA_DIRECT_RAGFLOW_CHECK": os.getenv("AI_QA_DIRECT_RAGFLOW_CHECK", "1"),
