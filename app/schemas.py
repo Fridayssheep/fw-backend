@@ -1,253 +1,253 @@
-from datetime import date  # 导入日期类型，方便定义设备安装日期字段。
-from datetime import datetime  # 导入日期时间类型，方便定义时间字段。
-from typing import Any  # 导入任意类型注解，方便给松散结构做标注。
+from datetime import date  # 瀵煎叆鏃ユ湡绫诲瀷锛屾柟渚垮畾涔夎澶囧畨瑁呮棩鏈熷瓧娈点€?
+from datetime import datetime  # 瀵煎叆鏃ユ湡鏃堕棿绫诲瀷锛屾柟渚垮畾涔夋椂闂村瓧娈点€?
+from typing import Any  # 瀵煎叆浠绘剰绫诲瀷娉ㄨВ锛屾柟渚跨粰鏉炬暎缁撴瀯鍋氭爣娉ㄣ€?
 
-from pydantic import BaseModel  # 导入 Pydantic 基类，用来定义接口模型。
-from pydantic import Field  # 导入字段定义函数，方便给字段设置默认值。
+from pydantic import BaseModel  # 瀵煎叆 Pydantic 鍩虹被锛岀敤鏉ュ畾涔夋帴鍙ｆā鍨嬨€?
+from pydantic import Field  # 瀵煎叆瀛楁瀹氫箟鍑芥暟锛屾柟渚跨粰瀛楁璁剧疆榛樿鍊笺€?
 
 
-class ErrorResponse(BaseModel):  # 定义统一错误响应模型。
-    code: str  # 定义错误码字段。
-    message: str  # 定义错误信息字段。
+class ErrorResponse(BaseModel):  # 瀹氫箟缁熶竴閿欒鍝嶅簲妯″瀷銆?
+    code: str  # 瀹氫箟閿欒鐮佸瓧娈点€?
+    message: str  # 瀹氫箟閿欒淇℃伅瀛楁銆?
 
 
-class SystemHealth(BaseModel):  # 定义健康检查响应模型。
-    status: str  # 定义服务状态字段。
-    database: str  # 定义数据库状态字段。
-    timestamp: datetime  # 定义响应时间字段。
+class SystemHealth(BaseModel):  # 瀹氫箟鍋ュ悍妫€鏌ュ搷搴旀ā鍨嬨€?
+    status: str  # 瀹氫箟鏈嶅姟鐘舵€佸瓧娈点€?
+    database: str  # 瀹氫箟鏁版嵁搴撶姸鎬佸瓧娈点€?
+    timestamp: datetime  # 瀹氫箟鍝嶅簲鏃堕棿瀛楁銆?
 
 
-class TimeRange(BaseModel):  # 定义时间范围模型。
-    start: datetime  # 定义开始时间字段。
-    end: datetime  # 定义结束时间字段。
+class TimeRange(BaseModel):  # 瀹氫箟鏃堕棿鑼冨洿妯″瀷銆?
+    start: datetime  # 瀹氫箟寮€濮嬫椂闂村瓧娈点€?
+    end: datetime  # 瀹氫箟缁撴潫鏃堕棿瀛楁銆?
 
 
-class Pagination(BaseModel):  # 定义分页模型。
-    page: int  # 定义页码字段。
-    page_size: int  # 定义每页条数字段。
-    total: int  # 定义总条数字段。
+class Pagination(BaseModel):  # 瀹氫箟鍒嗛〉妯″瀷銆?
+    page: int  # 瀹氫箟椤电爜瀛楁銆?
+    page_size: int  # 瀹氫箟姣忛〉鏉℃暟瀛楁銆?
+    total: int  # 瀹氫箟鎬绘潯鏁板瓧娈点€?
 
 
-class MeterAvailability(BaseModel):  # 定义建筑表计可用性模型。
-    meter: str  # 定义表计类型字段。
-    available: bool  # 定义是否可用字段。
+class MeterAvailability(BaseModel):  # 瀹氫箟寤虹瓚琛ㄨ鍙敤鎬фā鍨嬨€?
+    meter: str  # 瀹氫箟琛ㄨ绫诲瀷瀛楁銆?
+    available: bool  # 瀹氫箟鏄惁鍙敤瀛楁銆?
 
 
-class MetricCard(BaseModel):  # 定义通用指标卡片模型。
-    key: str  # 定义指标键字段。
-    label: str  # 定义指标名称字段。
-    value: float  # 定义指标值字段。
-    unit: str | None = None  # 定义指标单位字段。
-    change_rate: float | None = None  # 定义变化率字段。
+class MetricCard(BaseModel):  # 瀹氫箟閫氱敤鎸囨爣鍗＄墖妯″瀷銆?
+    key: str  # 瀹氫箟鎸囨爣閿瓧娈点€?
+    label: str  # 瀹氫箟鎸囨爣鍚嶇О瀛楁銆?
+    value: float  # 瀹氫箟鎸囨爣鍊煎瓧娈点€?
+    unit: str | None = None  # 瀹氫箟鎸囨爣鍗曚綅瀛楁銆?
+    change_rate: float | None = None  # 瀹氫箟鍙樺寲鐜囧瓧娈点€?
 
 
-class Building(BaseModel):  # 定义建筑基础信息模型。
-    building_id: str  # 定义建筑编号字段。
-    site_id: str  # 定义园区编号字段。
-    primaryspaceusage: str  # 定义主要用途字段。
-    sub_primaryspaceusage: str | None = None  # 定义次级用途字段。
-    sqm: float | None = None  # 定义建筑面积字段。
-    lat: float | None = None  # 定义纬度字段。
-    lng: float | None = None  # 定义经度字段。
-    timezone: str | None = None  # 定义时区字段。
-    yearbuilt: int | None = None  # 定义建成年份字段。
-    leed_level: str | None = None  # 定义 LEED 等级字段。
+class Building(BaseModel):  # 瀹氫箟寤虹瓚鍩虹淇℃伅妯″瀷銆?
+    building_id: str  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
+    site_id: str  # 瀹氫箟鍥尯缂栧彿瀛楁銆?
+    primaryspaceusage: str  # 瀹氫箟涓昏鐢ㄩ€斿瓧娈点€?
+    sub_primaryspaceusage: str | None = None  # 瀹氫箟娆＄骇鐢ㄩ€斿瓧娈点€?
+    sqm: float | None = None  # 瀹氫箟寤虹瓚闈㈢Н瀛楁銆?
+    lat: float | None = None  # 瀹氫箟绾害瀛楁銆?
+    lng: float | None = None  # 瀹氫箟缁忓害瀛楁銆?
+    timezone: str | None = None  # 瀹氫箟鏃跺尯瀛楁銆?
+    yearbuilt: int | None = None  # 瀹氫箟寤烘垚骞翠唤瀛楁銆?
+    leed_level: str | None = None  # 瀹氫箟 LEED 绛夌骇瀛楁銆?
 
 
-class BuildingListResponse(BaseModel):  # 定义建筑列表响应模型。
-    items: list[Building]  # 定义建筑列表字段。
-    pagination: Pagination  # 定义分页字段。
+class BuildingListResponse(BaseModel):  # 瀹氫箟寤虹瓚鍒楄〃鍝嶅簲妯″瀷銆?
+    items: list[Building]  # 瀹氫箟寤虹瓚鍒楄〃瀛楁銆?
+    pagination: Pagination  # 瀹氫箟鍒嗛〉瀛楁銆?
 
 
-class BuildingDetailResponse(BaseModel):  # 定义建筑详情响应模型。
-    building: Building  # 定义建筑信息字段。
-    meters: list[MeterAvailability]  # 定义表计可用性列表字段。
-    summary_metrics: list[MetricCard] = Field(default_factory=list)  # 定义摘要指标卡片字段。
+class BuildingDetailResponse(BaseModel):  # 瀹氫箟寤虹瓚璇︽儏鍝嶅簲妯″瀷銆?
+    building: Building  # 瀹氫箟寤虹瓚淇℃伅瀛楁銆?
+    meters: list[MeterAvailability]  # 瀹氫箟琛ㄨ鍙敤鎬у垪琛ㄥ瓧娈点€?
+    summary_metrics: list[MetricCard] = Field(default_factory=list)  # 瀹氫箟鎽樿鎸囨爣鍗＄墖瀛楁銆?
 
 
-class EnergyPoint(BaseModel):  # 定义单个能耗点模型。
-    timestamp: datetime  # 定义时间点字段。
-    building_id: str | None = None  # 定义建筑编号字段。
-    meter: str | None = None  # 定义表计类型字段。
-    value: float  # 定义能耗值字段。
+class EnergyPoint(BaseModel):  # 瀹氫箟鍗曚釜鑳借€楃偣妯″瀷銆?
+    timestamp: datetime  # 瀹氫箟鏃堕棿鐐瑰瓧娈点€?
+    building_id: str | None = None  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
+    meter: str | None = None  # 瀹氫箟琛ㄨ绫诲瀷瀛楁銆?
+    value: float  # 瀹氫箟鑳借€楀€煎瓧娈点€?
 
 
-class EnergySummary(BaseModel):  # 定义能耗汇总模型。
-    meter: str  # 定义表计类型字段。
-    total: float  # 定义总能耗字段。
-    average: float  # 定义平均能耗字段。
-    peak: float  # 定义峰值能耗字段。
-    peak_time: datetime | None = None  # 定义峰值时间字段。
-    unit: str | None = None  # 定义单位字段。
+class EnergySummary(BaseModel):  # 瀹氫箟鑳借€楁眹鎬绘ā鍨嬨€?
+    meter: str  # 瀹氫箟琛ㄨ绫诲瀷瀛楁銆?
+    total: float  # 瀹氫箟鎬昏兘鑰楀瓧娈点€?
+    average: float  # 瀹氫箟骞冲潎鑳借€楀瓧娈点€?
+    peak: float  # 瀹氫箟宄板€艰兘鑰楀瓧娈点€?
+    peak_time: datetime | None = None  # 瀹氫箟宄板€兼椂闂村瓧娈点€?
+    unit: str | None = None  # 瀹氫箟鍗曚綅瀛楁銆?
 
 
-class EnergySummaryResponse(BaseModel):  # 定义建筑级能耗摘要响应模型。
-    building_id: str  # 定义建筑编号字段。
-    time_range: TimeRange  # 定义时间范围字段。
-    summary: EnergySummary  # 定义能耗摘要字段。
+class EnergySummaryResponse(BaseModel):  # 瀹氫箟寤虹瓚绾ц兘鑰楁憳瑕佸搷搴旀ā鍨嬨€?
+    building_id: str  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
+    time_range: TimeRange  # 瀹氫箟鏃堕棿鑼冨洿瀛楁銆?
+    summary: EnergySummary  # 瀹氫箟鑳借€楁憳瑕佸瓧娈点€?
 
 
-class EnergyQueryResponse(BaseModel):  # 定义能耗明细查询响应模型。
-    items: list[EnergyPoint]  # 定义明细数据列表字段。
-    summary: EnergySummary  # 定义摘要字段。
-    pagination: Pagination | None = None  # 定义分页字段。
+class EnergyQueryResponse(BaseModel):  # 瀹氫箟鑳借€楁槑缁嗘煡璇㈠搷搴旀ā鍨嬨€?
+    items: list[EnergyPoint]  # 瀹氫箟鏄庣粏鏁版嵁鍒楄〃瀛楁銆?
+    summary: EnergySummary  # 瀹氫箟鎽樿瀛楁銆?
+    pagination: Pagination | None = None  # 瀹氫箟鍒嗛〉瀛楁銆?
 
 
-class EnergySeries(BaseModel):  # 定义趋势序列模型。
-    building_id: str | None = None  # 定义建筑编号字段。
-    meter: str  # 定义表计类型字段。
-    unit: str | None = None  # 定义单位字段。
-    points: list[EnergyPoint]  # 定义点位列表字段。
+class EnergySeries(BaseModel):  # 瀹氫箟瓒嬪娍搴忓垪妯″瀷銆?
+    building_id: str | None = None  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
+    meter: str  # 瀹氫箟琛ㄨ绫诲瀷瀛楁銆?
+    unit: str | None = None  # 瀹氫箟鍗曚綅瀛楁銆?
+    points: list[EnergyPoint]  # 瀹氫箟鐐逛綅鍒楄〃瀛楁銆?
 
 
-class EnergyTrendResponse(BaseModel):  # 定义趋势响应模型。
-    time_range: TimeRange  # 定义时间范围字段。
-    series: list[EnergySeries]  # 定义趋势序列字段。
+class EnergyTrendResponse(BaseModel):  # 瀹氫箟瓒嬪娍鍝嶅簲妯″瀷銆?
+    time_range: TimeRange  # 瀹氫箟鏃堕棿鑼冨洿瀛楁銆?
+    series: list[EnergySeries]  # 瀹氫箟瓒嬪娍搴忓垪瀛楁銆?
 
 
-class EnergyCompareItem(BaseModel):  # 定义对比项模型。
-    building_id: str  # 定义建筑编号字段。
-    metric: str  # 定义对比指标字段。
-    value: float  # 定义对比值字段。
-    unit: str | None = None  # 定义单位字段。
+class EnergyCompareItem(BaseModel):  # 瀹氫箟瀵规瘮椤规ā鍨嬨€?
+    building_id: str  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
+    metric: str  # 瀹氫箟瀵规瘮鎸囨爣瀛楁銆?
+    value: float  # 瀹氫箟瀵规瘮鍊煎瓧娈点€?
+    unit: str | None = None  # 瀹氫箟鍗曚綅瀛楁銆?
 
 
-class EnergyCompareResponse(BaseModel):  # 定义对比响应模型。
-    items: list[EnergyCompareItem]  # 定义对比结果列表字段。
+class EnergyCompareResponse(BaseModel):  # 瀹氫箟瀵规瘮鍝嶅簲妯″瀷銆?
+    items: list[EnergyCompareItem]  # 瀹氫箟瀵规瘮缁撴灉鍒楄〃瀛楁銆?
 
 
-class EnergyRankingItem(BaseModel):  # 定义排行项模型。
-    rank: int  # 定义排名字段。
-    building_id: str  # 定义建筑编号字段。
-    value: float  # 定义排行值字段。
-    unit: str | None = None  # 定义单位字段。
+class EnergyRankingItem(BaseModel):  # 瀹氫箟鎺掕椤规ā鍨嬨€?
+    rank: int  # 瀹氫箟鎺掑悕瀛楁銆?
+    building_id: str  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
+    value: float  # 瀹氫箟鎺掕鍊煎瓧娈点€?
+    unit: str | None = None  # 瀹氫箟鍗曚綅瀛楁銆?
 
 
-class EnergyRankingResponse(BaseModel):  # 定义排行响应模型。
-    items: list[EnergyRankingItem]  # 定义排行结果列表字段。
+class EnergyRankingResponse(BaseModel):  # 瀹氫箟鎺掕鍝嶅簲妯″瀷銆?
+    items: list[EnergyRankingItem]  # 瀹氫箟鎺掕缁撴灉鍒楄〃瀛楁銆?
 
 
-class CopPoint(BaseModel):  # 定义 COP 单点模型。
-    timestamp: datetime  # 定义时间点字段。
-    cop: float  # 定义 COP 数值字段。
+class CopPoint(BaseModel):  # 瀹氫箟 COP 鍗曠偣妯″瀷銆?
+    timestamp: datetime  # 瀹氫箟鏃堕棿鐐瑰瓧娈点€?
+    cop: float  # 瀹氫箟 COP 鏁板€煎瓧娈点€?
 
 
-class CopSummary(BaseModel):  # 定义 COP 摘要模型。
-    avg_cop: float  # 定义平均 COP 字段。
-    min_cop: float  # 定义最小 COP 字段。
-    max_cop: float  # 定义最大 COP 字段。
-    calculation_mode: str  # 定义计算模式字段。
-    formula: str  # 定义公式说明字段。
+class CopSummary(BaseModel):  # 瀹氫箟 COP 鎽樿妯″瀷銆?
+    avg_cop: float  # 瀹氫箟骞冲潎 COP 瀛楁銆?
+    min_cop: float  # 瀹氫箟鏈€灏?COP 瀛楁銆?
+    max_cop: float  # 瀹氫箟鏈€澶?COP 瀛楁銆?
+    calculation_mode: str  # 瀹氫箟璁＄畻妯″紡瀛楁銆?
+    formula: str  # 瀹氫箟鍏紡璇存槑瀛楁銆?
 
 
-class CopAnalysisResponse(BaseModel):  # 定义 COP 响应模型。
-    building_id: str  # 定义建筑编号字段。
-    time_range: TimeRange  # 定义时间范围字段。
-    points: list[CopPoint]  # 定义 COP 点位列表字段。
-    summary: CopSummary | dict[str, Any] | None = None  # 定义摘要字段，同时兼容文档里的 object。
+class CopAnalysisResponse(BaseModel):  # 瀹氫箟 COP 鍝嶅簲妯″瀷銆?
+    building_id: str  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
+    time_range: TimeRange  # 瀹氫箟鏃堕棿鑼冨洿瀛楁銆?
+    points: list[CopPoint]  # 瀹氫箟 COP 鐐逛綅鍒楄〃瀛楁銆?
+    summary: CopSummary | dict[str, Any] | None = None  # 瀹氫箟鎽樿瀛楁锛屽悓鏃跺吋瀹规枃妗ｉ噷鐨?object銆?
 
 
-class WeatherPoint(BaseModel):  # 定义天气点模型。
-    timestamp: datetime  # 定义时间点字段。
-    air_temperature: float | None = None  # 定义气温字段。
-    dew_temperature: float | None = None  # 定义露点温度字段。
-    wind_speed: float | None = None  # 定义风速字段。
+class WeatherPoint(BaseModel):  # 瀹氫箟澶╂皵鐐规ā鍨嬨€?
+    timestamp: datetime  # 瀹氫箟鏃堕棿鐐瑰瓧娈点€?
+    air_temperature: float | None = None  # 瀹氫箟姘旀俯瀛楁銆?
+    dew_temperature: float | None = None  # 瀹氫箟闇茬偣娓╁害瀛楁銆?
+    wind_speed: float | None = None  # 瀹氫箟椋庨€熷瓧娈点€?
 
 
-class WeatherFactor(BaseModel):  # 定义天气相关因子模型。
-    name: str  # 定义因子名称字段。
-    coefficient: float  # 定义相关系数字段。
-    direction: str  # 定义正负方向字段。
+class WeatherFactor(BaseModel):  # 瀹氫箟澶╂皵鐩稿叧鍥犲瓙妯″瀷銆?
+    name: str  # 瀹氫箟鍥犲瓙鍚嶇О瀛楁銆?
+    coefficient: float  # 瀹氫箟鐩稿叧绯绘暟瀛楁銆?
+    direction: str  # 瀹氫箟姝ｈ礋鏂瑰悜瀛楁銆?
 
 
-class WeatherCorrelationResponse(BaseModel):  # 定义天气相关性响应模型。
-    building_id: str  # 定义建筑编号字段。
-    meter: str  # 定义表计类型字段。
-    correlation_coefficient: float  # 定义主相关系数字段。
-    factors: list[WeatherFactor] = Field(default_factory=list)  # 定义因子列表字段。
+class WeatherCorrelationResponse(BaseModel):  # 瀹氫箟澶╂皵鐩稿叧鎬у搷搴旀ā鍨嬨€?
+    building_id: str  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
+    meter: str  # 瀹氫箟琛ㄨ绫诲瀷瀛楁銆?
+    correlation_coefficient: float  # 瀹氫箟涓荤浉鍏崇郴鏁板瓧娈点€?
+    factors: list[WeatherFactor] = Field(default_factory=list)  # 瀹氫箟鍥犲瓙鍒楄〃瀛楁銆?
 
 
-class DeviceSummary(BaseModel):  # 定义设备摘要模型。
-    device_id: str  # 定义设备编号字段。
-    device_name: str  # 定义设备名称字段。
-    device_type: str  # 定义设备类型字段。
-    building_id: str | None = None  # 定义建筑编号字段。
-    status: str  # 定义设备状态字段。
+class DeviceSummary(BaseModel):  # 瀹氫箟璁惧鎽樿妯″瀷銆?
+    device_id: str  # 瀹氫箟璁惧缂栧彿瀛楁銆?
+    device_name: str  # 瀹氫箟璁惧鍚嶇О瀛楁銆?
+    device_type: str  # 瀹氫箟璁惧绫诲瀷瀛楁銆?
+    building_id: str | None = None  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
+    status: str  # 瀹氫箟璁惧鐘舵€佸瓧娈点€?
 
 
-class Device(DeviceSummary):  # 定义设备详情模型。
-    manufacturer: str | None = None  # 定义制造商字段。
-    model: str | None = None  # 定义型号字段。
-    install_date: date | None = None  # 定义安装日期字段。
-    last_seen_at: datetime | None = None  # 定义最后活跃时间字段。
+class Device(DeviceSummary):  # 瀹氫箟璁惧璇︽儏妯″瀷銆?
+    manufacturer: str | None = None  # 瀹氫箟鍒堕€犲晢瀛楁銆?
+    model: str | None = None  # 瀹氫箟鍨嬪彿瀛楁銆?
+    install_date: date | None = None  # 瀹氫箟瀹夎鏃ユ湡瀛楁銆?
+    last_seen_at: datetime | None = None  # 瀹氫箟鏈€鍚庢椿璺冩椂闂村瓧娈点€?
 
 
-class DeviceListResponse(BaseModel):  # 定义设备列表响应模型。
-    items: list[Device]  # 定义设备列表字段。
-    pagination: Pagination  # 定义分页字段。
+class DeviceListResponse(BaseModel):  # 瀹氫箟璁惧鍒楄〃鍝嶅簲妯″瀷銆?
+    items: list[Device]  # 瀹氫箟璁惧鍒楄〃瀛楁銆?
+    pagination: Pagination  # 瀹氫箟鍒嗛〉瀛楁銆?
 
 
-class DeviceAlarm(BaseModel):  # 定义设备告警模型。
-    alarm_id: str  # 定义告警编号字段。
-    device_id: str  # 定义设备编号字段。
-    level: str  # 定义告警等级字段。
-    code: str | None = None  # 定义告警代码字段。
-    message: str  # 定义告警消息字段。
-    status: str  # 定义告警状态字段。
-    occurred_at: datetime  # 定义告警发生时间字段。
+class DeviceAlarm(BaseModel):  # 瀹氫箟璁惧鍛婅妯″瀷銆?
+    alarm_id: str  # 瀹氫箟鍛婅缂栧彿瀛楁銆?
+    device_id: str  # 瀹氫箟璁惧缂栧彿瀛楁銆?
+    level: str  # 瀹氫箟鍛婅绛夌骇瀛楁銆?
+    code: str | None = None  # 瀹氫箟鍛婅浠ｇ爜瀛楁銆?
+    message: str  # 瀹氫箟鍛婅娑堟伅瀛楁銆?
+    status: str  # 瀹氫箟鍛婅鐘舵€佸瓧娈点€?
+    occurred_at: datetime  # 瀹氫箟鍛婅鍙戠敓鏃堕棿瀛楁銆?
 
 
-class DeviceAlarmListResponse(BaseModel):  # 定义设备告警列表响应模型。
-    items: list[DeviceAlarm]  # 定义告警列表字段。
-    pagination: Pagination  # 定义分页字段。
+class DeviceAlarmListResponse(BaseModel):  # 瀹氫箟璁惧鍛婅鍒楄〃鍝嶅簲妯″瀷銆?
+    items: list[DeviceAlarm]  # 瀹氫箟鍛婅鍒楄〃瀛楁銆?
+    pagination: Pagination  # 瀹氫箟鍒嗛〉瀛楁銆?
 
 
-class DeviceDetailResponse(BaseModel):  # 定义设备详情响应模型。
-    device: Device  # 定义设备详情字段。
-    recent_alarms: list[DeviceAlarm] = Field(default_factory=list)  # 定义最近告警字段。
-    recent_metrics: list[MetricCard] = Field(default_factory=list)  # 定义最近指标字段。
+class DeviceDetailResponse(BaseModel):  # 瀹氫箟璁惧璇︽儏鍝嶅簲妯″瀷銆?
+    device: Device  # 瀹氫箟璁惧璇︽儏瀛楁銆?
+    recent_alarms: list[DeviceAlarm] = Field(default_factory=list)  # 瀹氫箟鏈€杩戝憡璀﹀瓧娈点€?
+    recent_metrics: list[MetricCard] = Field(default_factory=list)  # 瀹氫箟鏈€杩戞寚鏍囧瓧娈点€?
 
 
-class MaintenanceRecord(BaseModel):  # 定义维护记录模型。
-    record_id: str  # 定义记录编号字段。
-    device_id: str  # 定义设备编号字段。
-    title: str  # 定义维护标题字段。
-    description: str | None = None  # 定义维护描述字段。
-    performed_at: datetime  # 定义维护执行时间字段。
+class MaintenanceRecord(BaseModel):  # 瀹氫箟缁存姢璁板綍妯″瀷銆?
+    record_id: str  # 瀹氫箟璁板綍缂栧彿瀛楁銆?
+    device_id: str  # 瀹氫箟璁惧缂栧彿瀛楁銆?
+    title: str  # 瀹氫箟缁存姢鏍囬瀛楁銆?
+    description: str | None = None  # 瀹氫箟缁存姢鎻忚堪瀛楁銆?
+    performed_at: datetime  # 瀹氫箟缁存姢鎵ц鏃堕棿瀛楁銆?
 
 
-class MaintenanceRecordListResponse(BaseModel):  # 定义维护记录列表响应模型。
-    items: list[MaintenanceRecord]  # 定义维护记录列表字段。
-    pagination: Pagination  # 定义分页字段。
+class MaintenanceRecordListResponse(BaseModel):  # 瀹氫箟缁存姢璁板綍鍒楄〃鍝嶅簲妯″瀷銆?
+    items: list[MaintenanceRecord]  # 瀹氫箟缁存姢璁板綍鍒楄〃瀛楁銆?
+    pagination: Pagination  # 瀹氫箟鍒嗛〉瀛楁銆?
 
 
-class DetectedAnomalyPoint(BaseModel):  # 定义检测到的异常点模型。
-    timestamp: datetime  # 定义异常时间字段。
-    actual_value: float  # 定义实际值字段。
-    baseline_value: float  # 定义基线值字段。
-    deviation_rate: float  # 定义偏离率字段。
-    severity: str  # 定义严重级别字段。
+class DetectedAnomalyPoint(BaseModel):  # 瀹氫箟妫€娴嬪埌鐨勫紓甯哥偣妯″瀷銆?
+    timestamp: datetime  # 瀹氫箟寮傚父鏃堕棿瀛楁銆?
+    actual_value: float  # 瀹氫箟瀹為檯鍊煎瓧娈点€?
+    baseline_value: float  # 瀹氫箟鍩虹嚎鍊煎瓧娈点€?
+    deviation_rate: float  # 瀹氫箟鍋忕鐜囧瓧娈点€?
+    severity: str  # 瀹氫箟涓ラ噸绾у埆瀛楁銆?
 
 
-class EnergyAnomalyAnalysisRequest(BaseModel):  # 定义异常分析请求模型。
-    building_id: str  # 定义建筑编号字段。
-    meter: str  # 定义表计类型字段。
-    time_range: TimeRange  # 定义时间范围字段。
-    granularity: str | None = "hour"  # 定义粒度字段，默认按小时分析。
-    baseline_mode: str | None = "overall_mean"  # 定义基线模式字段，默认整体均值。
-    include_weather_context: bool | None = False  # 定义是否返回天气上下文字段。
+class EnergyAnomalyAnalysisRequest(BaseModel):  # 瀹氫箟寮傚父鍒嗘瀽璇锋眰妯″瀷銆?
+    building_id: str  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
+    meter: str  # 瀹氫箟琛ㄨ绫诲瀷瀛楁銆?
+    time_range: TimeRange  # 瀹氫箟鏃堕棿鑼冨洿瀛楁銆?
+    granularity: str | None = "hour"  # 瀹氫箟绮掑害瀛楁锛岄粯璁ゆ寜灏忔椂鍒嗘瀽銆?
+    baseline_mode: str | None = "overall_mean"  # 瀹氫箟鍩虹嚎妯″紡瀛楁锛岄粯璁ゆ暣浣撳潎鍊笺€?
+    include_weather_context: bool | None = False  # 瀹氫箟鏄惁杩斿洖澶╂皵涓婁笅鏂囧瓧娈点€?
 
 
-class EnergyAnomalyAnalysisResponse(BaseModel):  # 定义异常分析响应模型。
-    building_id: str  # 定义建筑编号字段。
-    meter: str  # 定义表计类型字段。
-    time_range: TimeRange  # 定义时间范围字段。
-    is_anomalous: bool  # 定义是否存在异常字段。
-    summary: str  # 定义摘要说明字段。
-    baseline_mode: str  # 定义基线模式字段。
-    detected_points: list[DetectedAnomalyPoint]  # 定义异常点列表字段。
-    series: EnergySeries  # 定义用于分析的原始序列字段。
-    weather_context: list[WeatherPoint] | None = None  # 定义天气上下文字段。
+class EnergyAnomalyAnalysisResponse(BaseModel):  # 瀹氫箟寮傚父鍒嗘瀽鍝嶅簲妯″瀷銆?
+    building_id: str  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
+    meter: str  # 瀹氫箟琛ㄨ绫诲瀷瀛楁銆?
+    time_range: TimeRange  # 瀹氫箟鏃堕棿鑼冨洿瀛楁銆?
+    is_anomalous: bool  # 瀹氫箟鏄惁瀛樺湪寮傚父瀛楁銆?
+    summary: str  # 瀹氫箟鎽樿璇存槑瀛楁銆?
+    baseline_mode: str  # 瀹氫箟鍩虹嚎妯″紡瀛楁銆?
+    detected_points: list[DetectedAnomalyPoint]  # 瀹氫箟寮傚父鐐瑰垪琛ㄥ瓧娈点€?
+    series: EnergySeries  # 瀹氫箟鐢ㄤ簬鍒嗘瀽鐨勫師濮嬪簭鍒楀瓧娈点€?
+    weather_context: list[WeatherPoint] | None = None  # 瀹氫箟澶╂皵涓婁笅鏂囧瓧娈点€?
 
 class AIActionItem(BaseModel):
     label: str
@@ -396,8 +396,38 @@ class AnomalyFeedbackResponse(BaseModel):
 
 class AIQARequest(BaseModel):
     question: str = Field(..., description="用户提出的问题")
-    session_id: str | None = Field(None, description="会话ID，用于保持多轮对话上下文")
+    session_id: str | None = Field(None, description="会话 ID，用于保持多轮对话上下文")
+
+
+class AIQAReferenceChunk(BaseModel):
+    chunk_id: str | None = Field(None, description="知识片段 ID")
+    document_id: str | None = Field(None, description="文档 ID")
+    document_name: str | None = Field(None, description="文档名称")
+    dataset_id: str | None = Field(None, description="知识库 ID")
+    content: str = Field(default="", description="知识片段内容")
+    similarity: float | None = Field(None, description="相似度分数")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="原始元数据")
+
+
+class AIQAReferenceDocAgg(BaseModel):
+    document_id: str | None = Field(None, description="文档 ID")
+    document_name: str | None = Field(None, description="文档名称")
+    count: int | None = Field(None, description="命中的片段数量")
+
+
+class AIQAReference(BaseModel):
+    chunks: list[AIQAReferenceChunk] = Field(default_factory=list, description="引用的知识片段")
+    doc_aggs: list[AIQAReferenceDocAgg] = Field(default_factory=list, description="按文档聚合的命中信息")
+
+
+class AIQAMeta(BaseModel):
+    provider: str = Field(..., description="上游知识问答服务提供方")
+    chat_id: str | None = Field(None, description="RAGFlow Chat ID")
+    used_openai_compatible: bool = Field(default=True, description="是否使用 OpenAI-compatible 接口")
+
 
 class AIQAResponse(BaseModel):
-    answer: str = Field(..., description="AI的回答")
-    session_id: str | None = Field(None, description="当前的会话ID")
+    answer: str = Field(..., description="AI 的回答")
+    session_id: str | None = Field(None, description="当前会话 ID")
+    references: AIQAReference = Field(default_factory=AIQAReference, description="知识库引用信息")
+    meta: AIQAMeta = Field(..., description="调用元信息")

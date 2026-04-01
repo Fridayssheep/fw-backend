@@ -36,6 +36,9 @@ class AISettings:
     # RAGFlow settings
     ragflow_api_url: str = os.getenv('RAGFLOW_API_URL', 'http://127.0.0.1:9380/api/v1')
     ragflow_api_key: str = os.getenv('RAGFLOW_API_KEY', '')
+    ragflow_timeout_seconds: float = float(os.getenv('RAGFLOW_TIMEOUT_SECONDS', '60'))
+    # RAGFlow 的 OpenAI-compatible 聊天接口要求带 model 字段，但服务端会自行解析，开发期传固定占位值即可。
+    ragflow_chat_model: str = os.getenv('RAGFLOW_CHAT_MODEL', 'ragflow-chat')
     ragflow_dataset_ids: tuple[str, ...] = _parse_csv_env(
         os.getenv('RAGFLOW_DATASET_IDS'),
         default=()
