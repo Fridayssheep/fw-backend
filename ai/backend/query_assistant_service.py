@@ -20,6 +20,16 @@ from .llm_client import OpenAICompatibleClient
 from .prompting import build_query_assistant_prompts
 
 
+# ============================================================================
+# 查询助手核心业务逻辑模块
+# 主要功能：
+#   1. 解析自然语言查询，提取关键信息（表计类型、时间范围、粒度等）
+#   2. 通过规则和 LLM 两种方式构建查询意图
+#   3. 推荐合适的后端查询 API 端点和查询参数
+#   4. 提供 fallback 机制确保查询意图总能被解析
+# ============================================================================
+
+
 ALLOWED_QUERY_ENDPOINTS = {
     '/energy/query',
     '/energy/trend',

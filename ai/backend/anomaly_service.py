@@ -23,6 +23,16 @@ from .llm_client import OpenAICompatibleClient
 from .prompting import build_analyze_anomaly_prompts
 
 
+# ============================================================================
+# AI 异常分析核心业务逻辑模块
+# 主要功能：
+#   1. 调用能耗异常检测接口获取异常数据
+#   2. 收集天气、知识库、历史反馈等上下文信息
+#   3. 调用 LLM 进行根因诊断和结构化分析
+#   4. 提供 fallback 机制确保服务可用性
+# ============================================================================
+
+
 def _build_analysis_id() -> str:
     """生成一次异常分析的唯一 ID。"""
     return f"ana_{uuid4().hex[:16]}"

@@ -30,13 +30,19 @@ from ai.mcp.formatters import (
     _summarize_energy_anomaly_analysis
 )
 
+# ============================================================================
+# MCP 服务器初始化
+# 为 LLM/AI 应用提供建筑能源数据查询和分析工具
+# ============================================================================
+
 mcp = FastMCP("building-energy-mcp")
 
 @mcp.tool()
 def backend_health() -> dict[str, Any]:
-    """检查后端健康状态。
+    """后端健康检查工具。
 
-    建议在调用其他能耗工具前先执行一次，快速确认服务与数据库是否可用。
+    检查后端 API 服务和数据库连接状态。建议在调用其他能耗工具前先执行一次，
+    快速确认服务与数据库是否可用。该工具返回服务状态、数据库状态和时间戳。
     """
     response = _request_backend("GET", "/health")
     return _build_tool_result(
@@ -66,7 +72,11 @@ def energy_query(
     page: int = 1,
     page_size: int = 100,
 ) -> dict[str, Any]:
-    """查询能耗明细/聚合数据（支持分页）。"""
+    """查询能耗数据详情或聚合数据。
+
+    按指定时间范围、粒度（小时/天/周/月）和聚合方式（sum/avg/max/min）
+    查询一个或多个建筑的能耗数据，支持分页查询。常用于趋势分析、对标比较、异常诊断等场景。
+    """
     normalized_building_ids = _validate_building_ids(building_ids, min_count=1)
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -106,7 +116,11 @@ def energy_trend(
     site_id: str | None = None,
     granularity: str | None = "day",
 ) -> dict[str, Any]:
-    """获取建筑时序趋势数据。"""
+    """获取建筑能耗时序趋势数据。
+
+    返回指定时间范围内的能耗趋势，用于观察能耗变化规律、季节性特征或长期发展趋势。
+    通常用于仪表板可视化、基线对标、运营决策支持等。
+    """
     normalized_building_ids = _validate_building_ids(building_ids, min_count=1)
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -139,7 +153,11 @@ def energy_compare(
     end_time: str,
     metric: str = "sum",
 ) -> dict[str, Any]:
-    """对比多栋建筑在同一指标下的能耗表现。"""
+    """多栋建筑能耗对标比较。
+
+    对比两个或多个建筑在同一表计类型、同一时间范围下的能耗表现（如总耗量、平均值、峰值等），
+    通常用于建筑间的性能基准对标、识别低效能建筑、或制定节能改进计划。
+    """
     normalized_building_ids = _validate_building_ids(building_ids, min_count=2)
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -172,7 +190,11 @@ def energy_rankings(
     order: str = "desc",
     limit: int = 10,
 ) -> dict[str, Any]:
-    """按时间窗口返回建筑能耗排行。"""
+    """建筑能耗排行榜。
+
+    按照指定的时间窗口和指标（总耗量、平均值、峰值等），返回所有建筑的能耗排行。
+    支持降序（从高到低）或升序（从低到高）排序，用于快速识别高耗能或低耗能的建筑。
+    """
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
     normalized_metric = _validate_choice("metric", metric, ALLOWED_RANKING_METRICS) or "sum"
@@ -206,7 +228,11 @@ def energy_cop_demo(
     end_time: str,
     granularity: str | None = "day",
 ) -> dict[str, Any]:
-    """获取 COP 演示版估算结果。"""
+    """COP（性能系数）演示版估算。
+
+    基于历史能耗数据和模型，对指定建筑在特定时间范围内的制冷/制热效率（COP）进行估算。
+    COP 越高表示能效越好，该工具用于评估建筑空调系统的运行效率。
+    """
     normalized_building_id = _validate_building_ids([building_id], min_count=1)[0]
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
     normalized_granularity = _validate_choice("granularity", granularity, ALLOWED_GRANULARITIES)
@@ -234,7 +260,12 @@ def energy_weather_correlation(
     start_time: str,
     end_time: str,
 ) -> dict[str, Any]:
-    """分析能耗与天气因素的相关性。"""
+    """分析能耗与天气因素的相关性。
+
+    计算建筑能耗与气温、湿度、日照等气象要素的相关系数，
+    识别哪些天气因素对能耗影响最大。用于理解气候驱动的能耗变化，
+    以及优化空调控制策略。
+    """
     normalized_building_id = _validate_building_ids([building_id], min_count=1)[0]
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -265,7 +296,13 @@ def energy_anomaly_analysis(
     baseline_mode: str = "overall_mean",
     include_weather_context: bool = True,
 ) -> dict[str, Any]:
-    """对单栋建筑、单类表计执行异常检测分析。"""
+    """异常检测和根因诊断分析。
+
+    对指定建筑和表计在给定时间窗口内执行异常检测分析，
+    返回检测到的异常点、统计摘要、候选根因和天气相关性等诊断信息。
+    支持多种基线计算模式（如全局平均、同类日期参考等），
+    可选择是否引入天气相关性分析以增强诊断准确性。
+    """
     normalized_building_id = _validate_building_ids([building_id], min_count=1)[0]
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -297,7 +334,11 @@ def energy_anomaly_analysis(
 
 @mcp.tool()
 def search_domain_knowledge(query: str, top_k: int = 3) -> str:
-    """检索建筑/设备运维知识库内容（RAGFlow）。"""
+    """检索建筑运维知识库。
+
+    通过 RAGFlow 知识库搜索与查询相关的建筑运维手册、设备说明、技术规范等内容，
+    返回最相关的文档摘录。常用于快速查询设备故障排除、规范要求、最佳实践等。
+    """
     import sys
     import os
     # 确保可导入 ai.backend 模块。
