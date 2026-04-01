@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 
 from .router_ai import router as ai_router
 from .router_buildings import router as buildings_router
-from .router_devices import router as devices_router
+from .router_meters import router as meters_router
 from .router_energy import router as energy_router
 from .router_system import router as system_router
 from .schemas import ErrorResponse
@@ -14,8 +14,8 @@ from .service_common import ResourceNotFoundError
 
 app = FastAPI(
     title="Building Energy AI & Backend API",
-    version="0.2.0-local-impl",
-    description="Minimal runnable implementation for system, energy, buildings, devices, and AI routes.",
+    version="0.3.0-local-impl",
+    description="Minimal runnable implementation for system, energy, buildings, meters, and AI routes.",
 )
 
 
@@ -45,6 +45,6 @@ def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
 
 app.include_router(system_router)
 app.include_router(buildings_router)
-app.include_router(devices_router)
+app.include_router(meters_router)
 app.include_router(energy_router)
 app.include_router(ai_router)

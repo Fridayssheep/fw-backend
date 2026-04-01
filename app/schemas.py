@@ -1,6 +1,7 @@
-from datetime import date  # 瀵煎叆鏃ユ湡绫诲瀷锛屾柟渚垮畾涔夎澶囧畨瑁呮棩鏈熷瓧娈点€?
-from datetime import datetime  # 瀵煎叆鏃ユ湡鏃堕棿绫诲瀷锛屾柟渚垮畾涔夋椂闂村瓧娈点€?
-from typing import Any  # 瀵煎叆浠绘剰绫诲瀷娉ㄨВ锛屾柟渚跨粰鏉炬暎缁撴瀯鍋氭爣娉ㄣ€?
+from datetime import date  # 导入日期类型，方便定义设备安装日期字段。
+from datetime import datetime  # 导入日期时间类型，方便定义时间字段。
+from enum import Enum  # 导入枚举类型，方便约束 meter 相关状态字段。
+from typing import Any  # 导入任意类型注解，方便给松散结构做标注。
 
 from pydantic import BaseModel  # 瀵煎叆 Pydantic 鍩虹被锛岀敤鏉ュ畾涔夋帴鍙ｆā鍨嬨€?
 from pydantic import Field  # 瀵煎叆瀛楁瀹氫箟鍑芥暟锛屾柟渚跨粰瀛楁璁剧疆榛樿鍊笺€?
@@ -167,66 +168,93 @@ class WeatherCorrelationResponse(BaseModel):  # 瀹氫箟澶╂皵鐩稿叧鎬у
     factors: list[WeatherFactor] = Field(default_factory=list)  # 瀹氫箟鍥犲瓙鍒楄〃瀛楁銆?
 
 
-class DeviceSummary(BaseModel):  # 瀹氫箟璁惧鎽樿妯″瀷銆?
-    device_id: str  # 瀹氫箟璁惧缂栧彿瀛楁銆?
-    device_name: str  # 瀹氫箟璁惧鍚嶇О瀛楁銆?
-    device_type: str  # 瀹氫箟璁惧绫诲瀷瀛楁銆?
-    building_id: str | None = None  # 瀹氫箟寤虹瓚缂栧彿瀛楁銆?
-    status: str  # 瀹氫箟璁惧鐘舵€佸瓧娈点€?
+class MeterStatus(str, Enum):  # 定义表计状态枚举。
+    online = "online"  # 定义在线状态。
+    warning = "warning"  # 定义告警状态。
+    fault = "fault"  # 定义故障状态。
+    offline = "offline"  # 定义离线状态。
 
 
-class Device(DeviceSummary):  # 瀹氫箟璁惧璇︽儏妯″瀷銆?
-    manufacturer: str | None = None  # 瀹氫箟鍒堕€犲晢瀛楁銆?
-    model: str | None = None  # 瀹氫箟鍨嬪彿瀛楁銆?
-    install_date: date | None = None  # 瀹氫箟瀹夎鏃ユ湡瀛楁銆?
-    last_seen_at: datetime | None = None  # 瀹氫箟鏈€鍚庢椿璺冩椂闂村瓧娈点€?
+class MeterSummary(BaseModel):  # 定义表计摘要模型。
+    meter_id: str  # 定义表计编号字段。
+    meter_name: str  # 定义表计名称字段。
+    meter_type: str  # 定义表计类型字段。
+    building_id: str | None = None  # 定义建筑编号字段。
+    status: MeterStatus  # 定义表计状态字段。
 
 
-class DeviceListResponse(BaseModel):  # 瀹氫箟璁惧鍒楄〃鍝嶅簲妯″瀷銆?
-    items: list[Device]  # 瀹氫箟璁惧鍒楄〃瀛楁銆?
-    pagination: Pagination  # 瀹氫箟鍒嗛〉瀛楁銆?
+class Meter(MeterSummary):  # 定义表计详情模型。
+    manufacturer: str | None = None  # 定义制造商字段。
+    model: str | None = None  # 定义型号字段。
+    install_date: date | None = None  # 定义安装日期字段。
+    last_seen_at: datetime | None = None  # 定义最后活跃时间字段。
 
 
-class DeviceAlarm(BaseModel):  # 瀹氫箟璁惧鍛婅妯″瀷銆?
-    alarm_id: str  # 瀹氫箟鍛婅缂栧彿瀛楁銆?
-    device_id: str  # 瀹氫箟璁惧缂栧彿瀛楁銆?
-    level: str  # 瀹氫箟鍛婅绛夌骇瀛楁銆?
-    code: str | None = None  # 瀹氫箟鍛婅浠ｇ爜瀛楁銆?
-    message: str  # 瀹氫箟鍛婅娑堟伅瀛楁銆?
-    status: str  # 瀹氫箟鍛婅鐘舵€佸瓧娈点€?
-    occurred_at: datetime  # 瀹氫箟鍛婅鍙戠敓鏃堕棿瀛楁銆?
+class MeterListResponse(BaseModel):  # 定义表计列表响应模型。
+    items: list[Meter]  # 定义表计列表字段。
+    pagination: Pagination  # 定义分页字段。
 
 
-class DeviceAlarmListResponse(BaseModel):  # 瀹氫箟璁惧鍛婅鍒楄〃鍝嶅簲妯″瀷銆?
-    items: list[DeviceAlarm]  # 瀹氫箟鍛婅鍒楄〃瀛楁銆?
-    pagination: Pagination  # 瀹氫箟鍒嗛〉瀛楁銆?
+class MeterAlarmLevel(str, Enum):  # 定义表计告警等级枚举。
+    info = "info"  # 定义提示级告警。
+    warning = "warning"  # 定义警告级告警。
+    critical = "critical"  # 定义严重级告警。
 
 
-class DeviceDetailResponse(BaseModel):  # 瀹氫箟璁惧璇︽儏鍝嶅簲妯″瀷銆?
-    device: Device  # 瀹氫箟璁惧璇︽儏瀛楁銆?
-    recent_alarms: list[DeviceAlarm] = Field(default_factory=list)  # 瀹氫箟鏈€杩戝憡璀﹀瓧娈点€?
-    recent_metrics: list[MetricCard] = Field(default_factory=list)  # 瀹氫箟鏈€杩戞寚鏍囧瓧娈点€?
+class MeterAlarmStatus(str, Enum):  # 定义表计告警状态枚举。
+    open = "open"  # 定义未关闭状态。
+    closed = "closed"  # 定义已关闭状态。
 
 
-class MaintenanceRecord(BaseModel):  # 瀹氫箟缁存姢璁板綍妯″瀷銆?
-    record_id: str  # 瀹氫箟璁板綍缂栧彿瀛楁銆?
-    device_id: str  # 瀹氫箟璁惧缂栧彿瀛楁銆?
-    title: str  # 瀹氫箟缁存姢鏍囬瀛楁銆?
-    description: str | None = None  # 瀹氫箟缁存姢鎻忚堪瀛楁銆?
-    performed_at: datetime  # 瀹氫箟缁存姢鎵ц鏃堕棿瀛楁銆?
+class MeterAlarm(BaseModel):  # 定义表计告警模型。
+    alarm_id: str  # 定义告警编号字段。
+    meter_id: str  # 定义表计编号字段。
+    level: MeterAlarmLevel  # 定义告警等级字段。
+    code: str | None = None  # 定义告警代码字段。
+    message: str  # 定义告警消息字段。
+    status: MeterAlarmStatus  # 定义告警状态字段。
+    occurred_at: datetime  # 定义告警发生时间字段。
 
 
-class MaintenanceRecordListResponse(BaseModel):  # 瀹氫箟缁存姢璁板綍鍒楄〃鍝嶅簲妯″瀷銆?
-    items: list[MaintenanceRecord]  # 瀹氫箟缁存姢璁板綍鍒楄〃瀛楁銆?
-    pagination: Pagination  # 瀹氫箟鍒嗛〉瀛楁銆?
+class MeterAlarmListResponse(BaseModel):  # 定义表计告警列表响应模型。
+    items: list[MeterAlarm]  # 定义告警列表字段。
+    pagination: Pagination  # 定义分页字段。
 
 
-class DetectedAnomalyPoint(BaseModel):  # 瀹氫箟妫€娴嬪埌鐨勫紓甯哥偣妯″瀷銆?
-    timestamp: datetime  # 瀹氫箟寮傚父鏃堕棿瀛楁銆?
-    actual_value: float  # 瀹氫箟瀹為檯鍊煎瓧娈点€?
-    baseline_value: float  # 瀹氫箟鍩虹嚎鍊煎瓧娈点€?
-    deviation_rate: float  # 瀹氫箟鍋忕鐜囧瓧娈点€?
-    severity: str  # 瀹氫箟涓ラ噸绾у埆瀛楁銆?
+class MeterDetailResponse(BaseModel):  # 定义表计详情响应模型。
+    meter: Meter  # 定义表计详情字段。
+    recent_alarms: list[MeterAlarm] = Field(default_factory=list)  # 定义最近告警字段。
+    recent_metrics: list[MetricCard] = Field(default_factory=list)  # 定义最近指标字段。
+
+
+class MaintenanceRecord(BaseModel):  # 定义维护记录模型。
+    record_id: str  # 定义记录编号字段。
+    meter_id: str  # 定义表计编号字段。
+    title: str  # 定义维护标题字段。
+    description: str | None = None  # 定义维护描述字段。
+    performed_at: datetime  # 定义维护执行时间字段。
+
+
+class MaintenanceRecordListResponse(BaseModel):  # 定义维护记录列表响应模型。
+    items: list[MaintenanceRecord]  # 定义维护记录列表字段。
+    pagination: Pagination  # 定义分页字段。
+
+
+# 兼容旧的 device 命名，避免其他模块导入路径立刻失效。
+DeviceSummary = MeterSummary
+Device = Meter
+DeviceListResponse = MeterListResponse
+DeviceAlarm = MeterAlarm
+DeviceAlarmListResponse = MeterAlarmListResponse
+DeviceDetailResponse = MeterDetailResponse
+
+
+class DetectedAnomalyPoint(BaseModel):  # 定义检测到的异常点模型。
+    timestamp: datetime  # 定义异常时间字段。
+    actual_value: float  # 定义实际值字段。
+    baseline_value: float  # 定义基线值字段。
+    deviation_rate: float  # 定义偏离率字段。
+    severity: str  # 定义严重级别字段。
 
 
 class EnergyAnomalyAnalysisRequest(BaseModel):  # 瀹氫箟寮傚父鍒嗘瀽璇锋眰妯″瀷銆?
