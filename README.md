@@ -6,10 +6,10 @@
 - `GET /buildings`
 - `GET /buildings/{buildingId}`
 - `GET /buildings/{buildingId}/energy/summary`
-- `GET /devices`
-- `GET /devices/{deviceId}`
-- `GET /devices/{deviceId}/alarms`
-- `GET /devices/{deviceId}/maintenance-records`
+- `GET /meters`
+- `GET /meters/{meterId}`
+- `GET /meters/{meterId}/alarms`
+- `GET /meters/{meterId}/maintenance-records`
 - `GET /energy/query`
 - `GET /energy/trend`
 - `GET /energy/compare`
