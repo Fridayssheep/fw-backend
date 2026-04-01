@@ -3,7 +3,9 @@ from typing import Annotated  # 导入 Annotated，方便给查询参数补充 Q
 from fastapi import APIRouter  # 导入 APIRouter，方便把 energy 路由单独拆分管理。
 from fastapi import Query  # 导入 Query，方便声明查询参数默认值和文档信息。
 from fastapi import Request  # 导入 Request，方便手动读取重复 query 参数。
+from pydantic import BeforeValidator  # 导入前置校验器，方便兼容空字符串数字参数。
 
+from .service_common import coerce_blank_to_default  # 导入空字符串回退默认值函数。
 from .schemas import CopAnalysisResponse  # 导入 COP 响应模型。
 from .schemas import EnergyAnomalyAnalysisRequest  # 导入异常分析请求模型。
 from .schemas import EnergyAnomalyAnalysisResponse  # 导入异常分析响应模型。
@@ -22,6 +24,9 @@ from .services_energy import get_energy_weather_correlation as get_energy_weathe
 
 
 router = APIRouter(tags=["Energy"])  # 创建 energy 分组路由对象，并统一设置文档标签。
+PageQueryInt = Annotated[int, BeforeValidator(coerce_blank_to_default(1))]  # 定义兼容空字符串的页码参数类型。
+PageSizeQueryInt = Annotated[int, BeforeValidator(coerce_blank_to_default(20))]  # 定义兼容空字符串的每页条数参数类型。
+LimitQueryInt = Annotated[int, BeforeValidator(coerce_blank_to_default(10))]  # 定义兼容空字符串的 limit 参数类型。
 
 
 def parse_building_ids(request: Request) -> list[str] | None:  # 定义解析 building_ids 查询参数的函数。
@@ -43,8 +48,8 @@ def query_energy_records(  # 定义能耗明细查询函数。
     end_time: Annotated[str | None, Query()] = None,  # 声明 end_time 查询参数，先按字符串接收，方便兼容未转义的 +08:00。
     granularity: Annotated[str | None, Query()] = None,  # 声明 granularity 查询参数。
     aggregation: Annotated[str | None, Query()] = None,  # 声明 aggregation 查询参数。
-    page: Annotated[int, Query()] = 1,  # 声明页码参数并给默认值。
-    page_size: Annotated[int, Query()] = 100,  # 声明每页条数参数并给默认值。
+    page: Annotated[PageQueryInt, Query()] = 1,  # 声明页码参数并给默认值，同时兼容空字符串。
+    page_size: Annotated[PageSizeQueryInt, Query()] = 20,  # 声明每页条数参数并给默认值，同时兼容空字符串。
 ) -> EnergyQueryResponse:  # 返回能耗明细响应模型。
     building_ids = parse_building_ids(request)  # 手动解析 building_ids 参数。
     return get_energy_query_service(building_ids, site_id, meter, start_time, end_time, granularity, aggregation, page, page_size)  # 调用业务层并返回结果。
@@ -82,7 +87,7 @@ def get_energy_rankings_api(  # 定义能耗排行处理函数。
     end_time: Annotated[str | None, Query()] = None,  # 声明 end_time 查询参数，先按字符串接收，方便兼容未转义的 +08:00。
     metric: Annotated[str | None, Query()] = None,  # 声明 metric 查询参数。
     order: Annotated[str | None, Query()] = None,  # 声明 order 查询参数。
-    limit: Annotated[int, Query()] = 10,  # 声明 limit 查询参数并给默认值。
+    limit: Annotated[LimitQueryInt, Query()] = 10,  # 声明 limit 查询参数并给默认值，同时兼容空字符串。
 ) -> EnergyRankingResponse:  # 返回排行响应模型。
     return get_energy_rankings_service(meter, start_time, end_time, metric, order, limit)  # 调用业务层并返回结果。
 

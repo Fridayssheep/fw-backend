@@ -2,17 +2,21 @@ from typing import Annotated  # 导入 Annotated，方便给查询参数补充 Q
 
 from fastapi import APIRouter  # 导入 APIRouter，方便把 buildings 路由单独拆分管理。
 from fastapi import Query  # 导入 Query，方便声明查询参数默认值和文档信息。
+from pydantic import BeforeValidator  # 导入前置校验器，方便兼容空字符串分页参数。
 
 from .schemas import BuildingDetailResponse  # 导入建筑详情响应模型。
 from .schemas import BuildingListResponse  # 导入建筑列表响应模型。
 from .schemas import EnergySummaryResponse  # 导入建筑级能耗摘要响应模型。
 from .schemas import ErrorResponse  # 导入统一错误响应模型。
+from .service_common import coerce_blank_to_default  # 导入空字符串回退默认值函数。
 from .services_buildings import get_building_detail as get_building_detail_service  # 导入建筑详情业务函数。
 from .services_buildings import get_building_energy_summary as get_building_energy_summary_service  # 导入建筑级能耗摘要业务函数。
 from .services_buildings import get_buildings as get_buildings_service  # 导入建筑列表业务函数。
 
 
 router = APIRouter(tags=["Buildings"])  # 创建 buildings 分组路由对象，并统一设置文档标签。
+PageQueryInt = Annotated[int, BeforeValidator(coerce_blank_to_default(1))]  # 定义兼容空字符串的页码参数类型。
+PageSizeQueryInt = Annotated[int, BeforeValidator(coerce_blank_to_default(20))]  # 定义兼容空字符串的每页条数参数类型。
 
 
 @router.get("/buildings", response_model=BuildingListResponse, summary="获取建筑列表")  # 注册建筑列表查询接口。
@@ -20,8 +24,8 @@ def get_buildings_api(  # 定义建筑列表查询处理函数。
     keyword: Annotated[str | None, Query()] = None,  # 声明 keyword 查询参数。
     site_id: Annotated[str | None, Query()] = None,  # 声明 site_id 查询参数。
     primaryspaceusage: Annotated[str | None, Query()] = None,  # 声明 primaryspaceusage 查询参数。
-    page: Annotated[int, Query()] = 1,  # 声明页码参数并给默认值。
-    page_size: Annotated[int, Query()] = 20,  # 声明每页条数参数并给默认值。
+    page: Annotated[PageQueryInt, Query()] = 1,  # 声明页码参数并给默认值，同时兼容空字符串。
+    page_size: Annotated[PageSizeQueryInt, Query()] = 20,  # 声明每页条数参数并给默认值，同时兼容空字符串。
 ) -> BuildingListResponse:  # 返回建筑列表响应模型。
     return get_buildings_service(keyword, site_id, primaryspaceusage, page, page_size)  # 调用业务层并返回结果。
 
