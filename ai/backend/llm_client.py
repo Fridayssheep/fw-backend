@@ -8,17 +8,25 @@ from .config import AISettings
 
 
 class OpenAICompatibleClient:
-    """Minimal OpenAI-compatible JSON generation client.
+    """OpenAI 兼容协议客户端。
 
-    This client targets any service exposing the OpenAI Chat Completions API,
-    including Ollama's `/v1/chat/completions` compatibility layer.
+    用途：
+    1. 通过 Chat Completions 接口请求模型。
+    2. 强制期望返回 JSON 对象，便于后续结构化解析。
+    3. 兼容 Ollama 等提供 OpenAI 风格 API 的服务。
     """
 
     def __init__(self, settings: AISettings) -> None:
         self._settings = settings
 
     def _extract_json_text(self, content: str) -> str:
-        """Extract the most likely JSON payload from model output."""
+        """从模型回复中提取最可能的 JSON 文本。
+
+        兼容三类常见输出：
+        1. ```json ... ``` 代码块。
+        2. 混杂说明文本 + JSON 对象。
+        3. 纯 JSON 文本。
+        """
 
         stripped = content.strip()
         if stripped.startswith('```'):
@@ -32,6 +40,7 @@ class OpenAICompatibleClient:
         return stripped
 
     def generate_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        """调用 LLM 并返回反序列化后的 JSON 对象。"""
         payload = {
             'model': self._settings.llm_model,
             'response_format': {'type': 'json_object'},

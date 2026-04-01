@@ -184,6 +184,7 @@ def _intent_to_query_params(intent: AIQueryIntent, endpoint: str) -> dict[str, A
 
 
 def _build_fallback_intent(payload: AIQueryAssistantRequest) -> tuple[AIQueryIntent, list[str]]:
+    """基于规则构造兜底查询意图，并返回提示告警。"""
     now = _now_with_tz(payload)
     warnings: list[str] = []
     building_ids = _extract_building_ids(payload.question)
@@ -232,6 +233,7 @@ def _normalize_llm_result(
     fallback_warnings: list[str],
     settings_model: str,
 ) -> AIQueryAssistantResponse:
+    """将 LLM 输出标准化为 query-assistant 接口响应。"""
     intent_payload = llm_response.get('query_intent') if isinstance(llm_response.get('query_intent'), dict) else {}
     time_range = _normalize_time_range(intent_payload.get('time_range'), fallback_intent.time_range) if fallback_intent.time_range else None
     intent = AIQueryIntent(
@@ -270,6 +272,7 @@ def _build_fallback_response(
     fallback_warnings: list[str],
     settings_model: str,
 ) -> AIQueryAssistantResponse:
+    """在 LLM 失败时返回可解释的规则兜底响应。"""
     endpoint = _recommend_endpoint(payload.question, fallback_intent)
     return AIQueryAssistantResponse(
         summary=f'已将问题解析为 {endpoint} 的查询意图。',
@@ -287,6 +290,7 @@ def _build_fallback_response(
 
 
 def build_query_intent(payload: AIQueryAssistantRequest) -> AIQueryAssistantResponse:
+    """查询助手主入口：将自然语言解析为结构化查询意图。"""
     settings = get_ai_settings()
     fallback_intent, fallback_warnings = _build_fallback_intent(payload)
     try:

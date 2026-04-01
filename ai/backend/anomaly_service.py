@@ -24,6 +24,7 @@ from .prompting import build_analyze_anomaly_prompts
 
 
 def _build_analysis_id() -> str:
+    """生成一次异常分析的唯一 ID。"""
     return f"ana_{uuid4().hex[:16]}"
 
 
@@ -255,6 +256,7 @@ def _build_fallback_response(
     settings_model: str,
     allowed_action_targets: tuple[str, ...],
 ) -> AIAnalyzeAnomalyResponse:
+    """在 LLM 不可用或输出非法时，构造可落地的兜底响应。"""
     analysis_id = _build_analysis_id()
     generated_at = get_taipei_now()
     return AIAnalyzeAnomalyResponse(
@@ -304,6 +306,7 @@ def _normalize_llm_response(
     settings_model: str,
     allowed_action_targets: tuple[str, ...],
 ) -> AIAnalyzeAnomalyResponse:
+    """将 LLM 原始 JSON 归一化为后端响应模型。"""
     analysis_id = _build_analysis_id()
     generated_at = get_taipei_now()
     candidate_causes = _coerce_candidate_causes(llm_response.get("candidate_causes"), request.max_candidate_causes)
@@ -345,7 +348,14 @@ def _normalize_llm_response(
 
 
 def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomalyResponse:
-    """Orchestrate structured anomaly analysis with optional LLM enrichment."""
+    """AI 异常分析总编排入口。
+
+    流程：
+    1. 先调用能耗异常检测接口拿到结构化结果。
+    2. 按配置可选补充天气、知识库、历史反馈上下文。
+    3. 调用 LLM 生成结构化诊断。
+    4. 若 LLM 失败，返回可用的 fallback 结果。
+    """
 
     energy_payload = EnergyAnomalyAnalysisRequest(
         building_id=payload.building_id,

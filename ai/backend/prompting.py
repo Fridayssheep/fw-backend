@@ -59,16 +59,19 @@ QUERY_ASSISTANT_SYSTEM_PROMPT = """\
 
 
 def _json_default_serializer(value: Any) -> Any:
+    """JSON 序列化兜底：时间类型转 ISO 字符串。"""
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     return str(value)
 
 
 def _json_block(value: Any) -> str:
+    """将对象格式化为可读的 JSON 文本块。"""
     return json.dumps(value, ensure_ascii=False, indent=2, default=_json_default_serializer)
 
 
 def _build_compact_anomaly_context(anomaly_result: EnergyAnomalyAnalysisResponse) -> dict[str, Any]:
+    """压缩异常分析结果，减少提示词 token 占用。"""
     detected_points = sorted(
         anomaly_result.detected_points,
         key=lambda item: item.deviation_rate,
@@ -111,6 +114,7 @@ def _build_compact_anomaly_context(anomaly_result: EnergyAnomalyAnalysisResponse
 
 
 def _build_compact_weather_context(weather_result: WeatherCorrelationResponse | None) -> dict[str, Any] | None:
+    """压缩天气相关性上下文，保留关键因子。"""
     if weather_result is None:
         return None
     strongest_factor = None
@@ -137,6 +141,7 @@ def _build_compact_weather_context(weather_result: WeatherCorrelationResponse | 
 
 
 def _build_compact_history_context(history_context: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """压缩历史反馈，仅保留最有代表性的字段。"""
     compact_items: list[dict[str, Any]] = []
     for item in history_context[:3]:
         compact_items.append(
@@ -160,7 +165,7 @@ def build_analyze_anomaly_prompts(
     history_context: list[dict[str, Any]],
     allowed_action_targets: tuple[str, ...],
 ) -> tuple[str, str]:
-    """Build Chinese-first prompts with strict JSON output constraints."""
+    """构造异常分析提示词（系统提示 + 用户提示）。"""
 
     output_schema_hint = {
         'summary': '一句话结论',
@@ -271,6 +276,7 @@ def build_query_assistant_prompts(
     question: str,
     current_time_iso: str,
 ) -> tuple[str, str]:
+    """构造 query-assistant 的提示词模板。"""
     output_schema_hint = {
         'summary': '一句话说明当前问题会被解析成什么查询',
         'query_intent': {

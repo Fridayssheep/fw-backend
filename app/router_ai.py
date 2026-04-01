@@ -34,3 +34,22 @@ def submit_anomaly_feedback_api(payload: AnomalyFeedbackRequest) -> AnomalyFeedb
     """Store operator feedback for anomaly analysis and future retrieval."""
 
     return submit_anomaly_feedback(payload)
+
+from .schemas import AIQARequest, AIQAResponse
+from ai.backend.ragflow_client import ragflow_client
+from fastapi import HTTPException
+
+@router.post("/ai/qa", response_model=AIQAResponse, summary="通用知识/运维库 AI 问答")
+def ask_ai_question_api(payload: AIQARequest) -> AIQAResponse:
+    """基于 RAGFlow 提供的建筑运维或者设备手册知识库直接进行问答。"""
+    result = ragflow_client.chat_completion(
+        question=payload.question,
+        session_id=payload.session_id
+    )
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+        
+    return AIQAResponse(
+        answer=result.get("answer", "No answer generated."),
+        session_id=result.get("session_id")
+    )

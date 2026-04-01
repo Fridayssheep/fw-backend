@@ -393,3 +393,11 @@ class AnomalyFeedbackResponse(BaseModel):
     message: str
     selected_cause: SelectedCauseSummary
     meta: AnomalyFeedbackMeta
+
+class AIQARequest(BaseModel):
+    question: str = Field(..., description="用户提出的问题")
+    session_id: str | None = Field(None, description="会话ID，用于保持多轮对话上下文")
+
+class AIQAResponse(BaseModel):
+    answer: str = Field(..., description="AI的回答")
+    session_id: str | None = Field(None, description="当前的会话ID")

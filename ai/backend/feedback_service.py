@@ -22,11 +22,13 @@ VALID_RESOLUTION_STATUS = {
 
 
 def _validate_score(score: int, field_name: str) -> None:
+    """校验评分范围，统一要求 1-5 分。"""
     if score < 1 or score > 5:
         raise ValueError(f'{field_name} must be between 1 and 5')
 
 
 def _normalize_candidate_feedbacks(payload: AnomalyFeedbackRequest) -> list[CandidateFeedbackItem]:
+    """标准化候选原因反馈，并补齐 selected_cause 的评分记录。"""
     seen: set[str] = set()
     normalized: list[CandidateFeedbackItem] = []
     for item in payload.candidate_feedbacks:
@@ -48,7 +50,10 @@ def _normalize_candidate_feedbacks(payload: AnomalyFeedbackRequest) -> list[Cand
 
 
 def submit_anomaly_feedback(payload: AnomalyFeedbackRequest) -> AnomalyFeedbackResponse:
-    """Persist operator feedback for later retrieval and reranking."""
+    """写入异常反馈主表与候选评分子表。
+
+    该接口用于后续历史检索和候选原因重排，是异常分析闭环的数据入口。
+    """
 
     _validate_score(payload.selected_score, 'selected_score')
     if payload.resolution_status not in VALID_RESOLUTION_STATUS:
