@@ -22,6 +22,7 @@ from ai.mcp.client import _request_backend
 from ai.mcp.formatters import (
     _build_tool_result,
     _summarize_domain_knowledge,
+    _summarize_domain_knowledge_answer,
     _summarize_energy_query,
     _summarize_energy_trend,
     _summarize_energy_compare,
@@ -30,7 +31,10 @@ from ai.mcp.formatters import (
     _summarize_weather_correlation,
     _summarize_energy_anomaly_analysis
 )
-from ai.backend.ragflow_client import ragflow_client
+from ai.backend.knowledge import (
+    answer_with_domain_knowledge as answer_with_domain_knowledge_result,
+    search_domain_knowledge_references,
+)
 
 # ============================================================================
 # MCP 服务器初始化
@@ -346,13 +350,37 @@ def search_domain_knowledge(query: str, top_k: int = 3) -> dict[str, Any]:
     if not normalized_query:
         raise ValueError("query 不能为空字符串。")
     safe_top_k = _validate_positive_int("top_k", top_k, minimum=1, maximum=10)
-    references = ragflow_client.retrieve_references(
-        question=normalized_query,
+    references = search_domain_knowledge_references(
+        normalized_query,
         top_k=safe_top_k,
     )
     return _summarize_domain_knowledge(
         references,
         query=normalized_query,
+        top_k=safe_top_k,
+    )
+
+
+@mcp.tool()
+def answer_with_domain_knowledge(question: str, top_k: int = 3) -> dict[str, Any]:
+    """基于 RAGFlow 知识库直接生成答案。
+
+    该工具会调用 RAGFlow `chats_openai`，返回更接近最终用户可直接阅读的成品答案。
+    由于 chats_openai 的结构化引用不够稳定，这个工具适合“快速拿答案”，
+    但如果上层模型还需要稳定证据链，仍建议同时调用 `search_domain_knowledge`。
+    """
+
+    normalized_question = question.strip()
+    if not normalized_question:
+        raise ValueError("question 不能为空字符串。")
+
+    safe_top_k = _validate_positive_int("top_k", top_k, minimum=1, maximum=10)
+    result = answer_with_domain_knowledge_result(
+        normalized_question,
+    )
+    return _summarize_domain_knowledge_answer(
+        result,
+        question=normalized_question,
         top_k=safe_top_k,
     )
 

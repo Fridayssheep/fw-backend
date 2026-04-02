@@ -16,9 +16,10 @@ from app.service_common import get_taipei_now
 
 from .anomaly_service import analyze_anomaly_with_ai
 from .config import get_ai_settings
+from .knowledge import build_compact_knowledge_items
+from .knowledge import search_domain_knowledge_references
 from .llm_client import OpenAICompatibleClient
 from .query_assistant_service import build_query_intent
-from .ragflow_client import ragflow_client
 
 
 MAX_QA_REFERENCE_ITEMS = 5
@@ -71,6 +72,19 @@ KNOWLEDGE_QA_SYSTEM_PROMPT = """\
 - answer
 """
 
+MIXED_QA_SYSTEM_PROMPT = """\
+你是“建筑能源总览 AI”中的综合问答助手。
+
+你的任务是把多个工具结果整合成一段清晰、可信、可执行的中文回答。
+
+必须遵守以下规则：
+1. 只能基于给定的工具结果作答，不要编造不存在的事实。
+2. 如果某类结果不足，请明确说明“当前信息不足”。
+3. 优先回答用户真正关心的主问题，再补充后续建议。
+4. 输出必须是合法 JSON，且只包含一个字段：
+   - answer
+"""
+
 
 def _trim_text(value: str, max_length: int = MAX_QA_SNIPPET_LENGTH) -> str:
     """裁剪长文本，避免返回过长引用。"""
@@ -83,20 +97,28 @@ def _trim_text(value: str, max_length: int = MAX_QA_SNIPPET_LENGTH) -> str:
 def _classify_question_type(question: str) -> str:
     """对问题做轻量分类，供总览式 AI 选择下一步工具。"""
 
-    lowered = question.lower()
-    fault_hits = sum(1 for item in FAULT_ANALYSIS_KEYWORDS if item.lower() in lowered)
-    data_hits = sum(1 for item in DATA_QUERY_KEYWORDS if item.lower() in lowered)
-    knowledge_hits = sum(1 for item in KNOWLEDGE_KEYWORDS if item.lower() in lowered)
-
-    if fault_hits and data_hits:
+    signals = _detect_question_signals(question)
+    hit_count = sum(1 for value in signals.values() if value)
+    if hit_count >= 2:
         return "mixed"
-    if fault_hits:
+    if signals["fault_analysis"]:
         return "fault_analysis"
-    if data_hits:
+    if signals["data_query"]:
         return "data_query"
-    if knowledge_hits:
+    if signals["knowledge"]:
         return "knowledge"
     return "other"
+
+
+def _detect_question_signals(question: str) -> dict[str, bool]:
+    """识别问题中是否同时包含知识、数据、异常三类诉求。"""
+
+    lowered = question.lower()
+    return {
+        "fault_analysis": any(item.lower() in lowered for item in FAULT_ANALYSIS_KEYWORDS),
+        "data_query": any(item.lower() in lowered for item in DATA_QUERY_KEYWORDS),
+        "knowledge": any(item.lower() in lowered for item in KNOWLEDGE_KEYWORDS),
+    }
 
 
 def _has_context_for_fault_analysis(context: AIQAContext | None) -> bool:
@@ -123,19 +145,54 @@ def _build_meta(settings_model: str, used_tools: list[AIUsedToolItem], reference
     )
 
 
+def _merge_references(*reference_groups: AIQAReferences) -> AIQAReferences:
+    """合并多路引用，并限制每类最多保留若干条。"""
+
+    merged = AIQAReferences()
+    for group in reference_groups:
+        if not group:
+            continue
+        merged.knowledge.extend(group.knowledge)
+        merged.data.extend(group.data)
+        merged.history_cases.extend(group.history_cases)
+    merged.knowledge = merged.knowledge[:MAX_QA_REFERENCE_ITEMS]
+    merged.data = merged.data[:MAX_QA_REFERENCE_ITEMS]
+    merged.history_cases = merged.history_cases[:MAX_QA_REFERENCE_ITEMS]
+    return merged
+
+
+def _dedupe_actions(actions: list[AISuggestedAction]) -> list[AISuggestedAction]:
+    """按 action_type + target 去重动作列表。"""
+
+    deduped: list[AISuggestedAction] = []
+    seen: set[tuple[str, str | None]] = set()
+    for item in actions:
+        key = (item.action_type, item.target)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 def _build_knowledge_reference_items(references: dict[str, Any]) -> list[AIReferenceItem]:
     """把 retrieval 结果压成适合前端显示的知识库引用。"""
 
     items: list[AIReferenceItem] = []
-    for chunk in (references.get("chunks", []) or [])[:MAX_QA_REFERENCE_ITEMS]:
+    compact_items = build_compact_knowledge_items(
+        references,
+        max_items=MAX_QA_REFERENCE_ITEMS,
+        snippet_length=MAX_QA_SNIPPET_LENGTH,
+    )
+    for chunk in compact_items:
         items.append(
             AIReferenceItem(
                 source_type="knowledge",
                 document_id=chunk.get("document_id"),
                 document_name=chunk.get("document_name"),
                 chunk_id=chunk.get("chunk_id"),
-                snippet=_trim_text(str(chunk.get("content") or "")),
-                score=chunk.get("similarity"),
+                snippet=chunk.get("snippet") or "",
+                score=chunk.get("score"),
             )
         )
     return items
@@ -211,6 +268,51 @@ def _build_query_action(query_result: Any) -> list[AISuggestedAction]:
     ]
 
 
+def _fallback_mixed_answer(question: str, answer_parts: list[str]) -> str:
+    """在综合回答的 LLM 汇总失败时，使用确定性拼接兜底。"""
+
+    clean_parts = [item.strip() for item in answer_parts if item and item.strip()]
+    if not clean_parts:
+        return (
+            f"我理解你的问题是：{question}。"
+            "不过当前没有拿到足够的工具结果，建议补充上下文后再试。"
+        )
+    return "\n\n".join(clean_parts)
+
+
+def _synthesize_mixed_answer(
+    question: str,
+    answer_parts: list[dict[str, str]],
+) -> str:
+    """把多路工具结果合成为一段最终回答。"""
+
+    clean_parts = [
+        {
+            "source": item.get("source", ""),
+            "content": item.get("content", "").strip(),
+        }
+        for item in answer_parts
+        if item.get("content", "").strip()
+    ]
+    if not clean_parts:
+        return _fallback_mixed_answer(question, [])
+
+    settings = get_ai_settings()
+    client = OpenAICompatibleClient(settings)
+    user_prompt = (
+        "请把下面这些工具结果整理成一段简洁、可信、对用户有帮助的最终回答。\n"
+        "如果其中某部分只是建议或推荐，请明确这是建议，不要伪装成已经执行的结果。\n\n"
+        f"【用户问题】\n{question}\n\n"
+        f"【工具结果】\n{clean_parts}\n"
+    )
+    try:
+        result = client.generate_json(MIXED_QA_SYSTEM_PROMPT, user_prompt)
+    except Exception:  # noqa: BLE001
+        return _fallback_mixed_answer(question, [item["content"] for item in clean_parts])
+    answer = str(result.get("answer") or "").strip()
+    return answer or _fallback_mixed_answer(question, [item["content"] for item in clean_parts])
+
+
 def _fallback_knowledge_answer(question: str, knowledge_references: list[AIReferenceItem]) -> str:
     """在 LLM 不可用时，用命中片段兜底生成回答。"""
 
@@ -258,8 +360,8 @@ def _generate_knowledge_answer(question: str, knowledge_references: list[AIRefer
 def _handle_knowledge_question(payload: AIQARequest, settings_model: str) -> AIQAResponse:
     """处理知识库问答类问题。"""
 
-    retrieval_references = ragflow_client.retrieve_references(
-        question=payload.question,
+    retrieval_references = search_domain_knowledge_references(
+        payload.question,
         top_k=MAX_QA_REFERENCE_ITEMS,
     )
     knowledge_references = _build_knowledge_reference_items(retrieval_references)
@@ -373,6 +475,69 @@ def _handle_fault_analysis_question(payload: AIQARequest, settings_model: str) -
     )
 
 
+def _handle_mixed_question(payload: AIQARequest, settings_model: str) -> AIQAResponse:
+    """处理混合型问题。
+
+    当前第一版策略：
+    1. 先识别知识 / 数据 / 异常三个子诉求
+    2. 命中哪个就调用哪个能力
+    3. 将多路结果合成为一个统一回答
+    """
+
+    signals = _detect_question_signals(payload.question)
+    used_tools: list[AIUsedToolItem] = []
+    suggested_actions: list[AISuggestedAction] = []
+    reference_groups: list[AIQAReferences] = []
+    answer_parts: list[dict[str, str]] = []
+
+    if signals["knowledge"]:
+        knowledge_response = _handle_knowledge_question(payload, settings_model)
+        reference_groups.append(knowledge_response.references)
+        used_tools.extend(knowledge_response.used_tools)
+        suggested_actions.extend(knowledge_response.suggested_actions)
+        answer_parts.append(
+            {
+                "source": "knowledge",
+                "content": knowledge_response.answer,
+            }
+        )
+
+    if signals["data_query"]:
+        data_response = _handle_data_query_question(payload, settings_model)
+        reference_groups.append(data_response.references)
+        used_tools.extend(data_response.used_tools)
+        suggested_actions.extend(data_response.suggested_actions)
+        answer_parts.append(
+            {
+                "source": "data_query",
+                "content": data_response.answer,
+            }
+        )
+
+    if signals["fault_analysis"]:
+        fault_response = _handle_fault_analysis_question(payload, settings_model)
+        reference_groups.append(fault_response.references)
+        used_tools.extend(fault_response.used_tools)
+        suggested_actions.extend(fault_response.suggested_actions)
+        answer_parts.append(
+            {
+                "source": "fault_analysis",
+                "content": fault_response.answer,
+            }
+        )
+
+    references = _merge_references(*reference_groups)
+    deduped_actions = _dedupe_actions(suggested_actions)
+    return AIQAResponse(
+        answer=_synthesize_mixed_answer(payload.question, answer_parts),
+        question_type="mixed",
+        references=references,
+        used_tools=used_tools,
+        suggested_actions=deduped_actions,
+        meta=_build_meta(settings_model, used_tools, references),
+    )
+
+
 def ask_ai_question(payload: AIQARequest) -> AIQAResponse:
     """总览式 /ai/qa 编排入口。
 
@@ -388,6 +553,8 @@ def ask_ai_question(payload: AIQARequest) -> AIQAResponse:
 
     if question_type == "data_query":
         return _handle_data_query_question(payload, settings.llm_model)
-    if question_type in {"fault_analysis", "mixed"}:
+    if question_type == "mixed":
+        return _handle_mixed_question(payload, settings.llm_model)
+    if question_type == "fault_analysis":
         return _handle_fault_analysis_question(payload, settings.llm_model)
     return _handle_knowledge_question(payload, settings.llm_model)

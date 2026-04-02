@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Building Energy AI QA API",
-    "version": "0.3.0-planned",
-    "description": "Planned standalone OpenAPI definition for the new /ai/qa orchestration endpoint. This endpoint acts as the unified AI entry for knowledge-base Q&A, fault-analysis guidance, energy-data retrieval assistance, and other mixed user intents. Internally it may call multiple tools such as RAG retrieval, anomaly analysis, query assistant, or energy APIs, but the frontend consumes a single normalized response."
+    "version": "0.3.0-draft",
+    "description": "Draft standalone OpenAPI definition for the new /ai/qa orchestration endpoint. This endpoint acts as the unified AI entry for knowledge-base Q&A, fault-analysis guidance, energy-data retrieval assistance, and other mixed user intents. The current first version mainly covers knowledge questions, query-assistant based data questions, and fault-analysis questions with sufficient context."
   },
   "tags": [
     {
@@ -17,7 +17,7 @@
           "AI"
         ],
         "summary": "总览式 AI 问答入口",
-        "description": "统一接收用户问题，由后端 AI 编排层自主决定是否调用知识库检索、数据查询、异常分析或其他工具，并返回统一的答案、引用、已使用工具和建议动作。前端不直接感知内部使用了哪种工具或模型。",
+        "description": "统一接收用户问题，由后端 AI 编排层自主决定是否调用知识库检索、查询意图解析、异常分析等工具，并返回统一的答案、引用、已使用工具和建议动作。前端不直接感知内部使用了哪种工具或模型。",
         "operationId": "aiQaOrchestrator",
         "requestBody": {
           "required": true,
@@ -68,11 +68,11 @@
                     "data": [],
                     "history_cases": []
                   },
-                  "used_tools": [
-                    {
-                      "tool_name": "search_domain_knowledge",
-                      "tool_type": "mcp",
-                      "reason": "问题属于设备知识与规范查询，需要先检索知识库证据。 "
+                    "used_tools": [
+                      {
+                        "tool_name": "search_domain_knowledge",
+                        "tool_type": "internal_service",
+                        "reason": "问题属于设备知识与规范查询，需要先检索知识库证据。"
                     }
                   ],
                   "suggested_actions": [
@@ -84,7 +84,7 @@
                   ],
                   "meta": {
                     "provider": "orchestrated",
-                    "model": "to_be_decided",
+                    "model": "qwen3.5-plus",
                     "generated_at": "2026-04-02T16:40:00+08:00",
                     "used_tools_count": 1,
                     "has_references": true

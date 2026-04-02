@@ -86,6 +86,82 @@ def _summarize_domain_knowledge(
         },
     )
 
+
+def _summarize_domain_knowledge_answer(
+    result: dict[str, Any],
+    *,
+    question: str,
+    top_k: int,
+) -> dict[str, Any]:
+    """格式化基于 chats_openai 的知识问答结果。"""
+
+    answer = str(result.get("answer") or "").strip()
+    session_id = result.get("session_id")
+    references = result.get("references", {}) or {}
+    chunks = references.get("chunks", []) or []
+    doc_aggs = references.get("doc_aggs", []) or []
+
+    compact_chunks = []
+    for item in chunks[:top_k]:
+        compact_chunks.append(
+            {
+                "chunk_id": item.get("chunk_id"),
+                "document_id": item.get("document_id"),
+                "document_name": item.get("document_name"),
+                "dataset_id": item.get("dataset_id"),
+                "snippet": _trim_knowledge_snippet(str(item.get("content") or "")),
+                "score": item.get("similarity"),
+            }
+        )
+
+    compact_doc_aggs = []
+    for item in doc_aggs[:top_k]:
+        compact_doc_aggs.append(
+            {
+                "document_id": item.get("document_id"),
+                "document_name": item.get("document_name"),
+                "count": item.get("count"),
+            }
+        )
+
+    highlights = [
+        f"问题: {question}",
+        f"答案长度: {len(answer)}",
+        f"引用片段数: {len(chunks)}",
+        f"引用文档数: {len(doc_aggs)}",
+    ]
+    if session_id:
+        highlights.append(f"session_id: {session_id}")
+
+    warnings: list[str] = []
+    if not compact_chunks:
+        warnings.append("RAGFlow chats_openai 未返回结构化引用；如需稳定证据，请改用 search_domain_knowledge。")
+
+    next_actions = [
+        "如需稳定结构化证据，请补调 search_domain_knowledge。",
+        "如需前端展示引用，优先使用 retrieval 返回的 chunks/doc_aggs。",
+    ]
+
+    return _build_tool_result(
+        tool_name="answer_with_domain_knowledge",
+        summary="已基于知识库生成成品答案。",
+        highlights=highlights,
+        warnings=warnings,
+        next_actions=next_actions,
+        request_context={
+            "question": question,
+            "top_k": top_k,
+        },
+        data={
+            "answer": answer,
+            "session_id": session_id,
+            "references": {
+                "chunks": compact_chunks,
+                "doc_aggs": compact_doc_aggs,
+            },
+        },
+    )
+
 def _summarize_energy_query(
     response: dict[str, Any],
     *,

@@ -48,6 +48,12 @@ METER_KEYWORDS = {
     'hotwater': ('热水', 'hotwater'),
 }
 
+DATE_TOKEN_REGEX = r'(\d{4})(?:[-/.年])(\d{1,2})(?:[-/.月])(\d{1,2})日?'
+DATE_TOKEN_PATTERN = re.compile(DATE_TOKEN_REGEX)
+DATE_RANGE_PATTERN = re.compile(
+    rf'(?P<start>{DATE_TOKEN_REGEX})\s*(?:到|至|~|～)\s*(?P<end>{DATE_TOKEN_REGEX})'
+)
+
 
 def _now_with_tz(request: AIQueryAssistantRequest) -> datetime:
     return request.current_time or get_taipei_now()
@@ -91,8 +97,75 @@ def _extract_building_ids(question: str) -> list[str]:
     return unique_items
 
 
+def _parse_date_token(raw_value: str, now: datetime) -> datetime | None:
+    """把问题里的显式日期文本解析成当天起始时间。"""
+
+    match = DATE_TOKEN_PATTERN.fullmatch(raw_value.strip())
+    if not match:
+        return None
+
+    try:
+        year = int(match.group(1))
+        month = int(match.group(2))
+        day = int(match.group(3))
+        return datetime(
+            year,
+            month,
+            day,
+            0,
+            0,
+            0,
+            tzinfo=now.tzinfo,
+        )
+    except ValueError:
+        return None
+
+
+def _resolve_explicit_time_range(question: str, now: datetime) -> TimeRange | None:
+    """优先解析问题中显式给出的绝对日期范围。"""
+
+    range_match = DATE_RANGE_PATTERN.search(question)
+    if range_match:
+        start = _parse_date_token(range_match.group('start'), now)
+        end = _parse_date_token(range_match.group('end'), now)
+        if start and end and start <= end:
+            return build_api_time_range(
+                start,
+                end.replace(hour=23, minute=59, second=59, microsecond=0),
+            )
+
+    date_matches = [match.group(0) for match in DATE_TOKEN_PATTERN.finditer(question)]
+    unique_dates: list[str] = []
+    for item in date_matches:
+        if item not in unique_dates:
+            unique_dates.append(item)
+
+    if len(unique_dates) >= 2:
+        start = _parse_date_token(unique_dates[0], now)
+        end = _parse_date_token(unique_dates[1], now)
+        if start and end and start <= end:
+            return build_api_time_range(
+                start,
+                end.replace(hour=23, minute=59, second=59, microsecond=0),
+            )
+
+    if len(unique_dates) == 1:
+        single_day = _parse_date_token(unique_dates[0], now)
+        if single_day:
+            return build_api_time_range(
+                single_day,
+                single_day.replace(hour=23, minute=59, second=59, microsecond=0),
+            )
+
+    return None
+
+
 def _resolve_time_range(question: str, now: datetime) -> tuple[TimeRange, list[str]]:
     warnings: list[str] = []
+    explicit_time_range = _resolve_explicit_time_range(question, now)
+    if explicit_time_range is not None:
+        return explicit_time_range, warnings
+
     text = question.lower()
     if any(keyword in text for keyword in ('今天', 'today')):
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)

@@ -5,12 +5,13 @@
 这份联调用于验证三件事：
 
 1. 后端 `/ai/qa` 路由是否可访问
-2. 后端是否能正确执行 retrieval + OpenAI-compatible chat 双阶段
+2. 后端是否能正确按问题类型执行总览式编排
 3. 返回中是否包含：
    - `answer`
-   - `session_id`
-   - `references.chunks`
-   - `references.doc_aggs`
+   - `question_type`
+   - `references.knowledge / data / history_cases`
+   - `used_tools`
+   - `suggested_actions`
    - `meta`
 
 ---
@@ -40,10 +41,10 @@ $env:AI_QA_DIRECT_RAGFLOW_CHECK='1'
 - `RAGFLOW_API_KEY`
   - RAGFlow 的 API Key
 - `RAGFLOW_DEFAULT_CHAT_ID`
-  - 用于 `/ai/qa` 的目标 Chat ID
+  - 当前环境中如果还保留该变量可以继续存在，但新版 `/ai/qa` 第一版主路径不再依赖 RAGFlow chat
 - `RAGFLOW_DATASET_IDS`
-  - retrieval 阶段要检索的知识库 ID，多个值用英文逗号分隔
-  - 如果不填，`/ai/qa` 仍可能正常回答，但大概率拿不到稳定的结构化引用
+  - knowledge 检索阶段要检索的知识库 ID，多个值用英文逗号分隔
+  - 如果不填，知识型问题大概率拿不到稳定的知识引用
 - `AI_QA_TEST_QUESTION`
   - 例如：`冷机报警先查什么？`
 - `AI_QA_TEST_SESSION_ID`
@@ -83,32 +84,32 @@ D:\code\服外\fw-backend\test\ai_qa_integration_report.json
 
 - `backend_http_check.status_code = 200`
 - `backend_http_check.answer_preview` 非空
-- `backend_http_check.reference_chunk_count >= 0`
-- `backend_http_check.provider = ragflow`
-- `backend_http_check.used_openai_compatible = true`
+- `backend_http_check.question_type` 非空
+- `backend_http_check.provider = orchestrated`
+- `backend_http_check.used_tools` 是数组
+- `backend_http_check.has_references` 能反映本次是否有证据引用
 
 ### 常见失败
 
 - `503`
-  - RAGFlow 配置缺失
-  - 常见是 `RAGFLOW_API_KEY`、`RAGFLOW_DEFAULT_CHAT_ID` 或 `RAGFLOW_DATASET_IDS` 没填
+  - 当前阶段通常不作为 `/ai/qa` 主路径的常见错误
+  - 若后续知识检索改成强依赖模式，可能由知识库配置缺失触发
 
 - `502`
-  - RAGFlow 鉴权失败
-  - Chat ID 不存在
-  - RAGFlow 返回结构不符合预期
+  - 当前阶段通常不作为 `/ai/qa` 主路径的常见错误
+  - 若知识检索走硬失败模式，可能由上游知识服务异常触发
 
 - `504`
-  - RAGFlow 超时
+  - 上游模型或知识服务超时
 
 ---
 
 ## 6. 推荐排查顺序
 
 1. 先看 `direct_ragflow_check`
-   - 如果这里就失败，优先检查 RAGFlow 地址、API Key、Chat ID、Dataset IDs
+   - 如果这里失败，优先检查 RAGFlow 地址、API Key、Dataset IDs
 2. 再看 `backend_http_check`
-   - 如果直连成功但后端失败，说明问题在后端路由、service 或响应适配
+   - 如果直连成功但后端失败，说明问题在 `/ai/qa` 编排逻辑或响应适配
 
 ---
 
@@ -117,12 +118,11 @@ D:\code\服外\fw-backend\test\ai_qa_integration_report.json
 已覆盖：
 
 - RAGFlow retrieval 直连检查
-- RAGFlow chats_openai 直连检查
 - `/ai/qa` HTTP 联调
-- 返回引用数量统计
+- `/ai/qa` 的 question_type / references / used_tools 结果统计
 
 未覆盖：
 
-- 多轮会话行为是否真的被上游保留
-- 超长回答
+- 混合问题的多工具编排
+- 异常分析上下文完整路径
 - 流式输出
