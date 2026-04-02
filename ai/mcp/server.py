@@ -21,6 +21,7 @@ from ai.mcp.utils import (
 from ai.mcp.client import _request_backend
 from ai.mcp.formatters import (
     _build_tool_result,
+    _summarize_domain_knowledge,
     _summarize_energy_query,
     _summarize_energy_trend,
     _summarize_energy_compare,
@@ -29,6 +30,7 @@ from ai.mcp.formatters import (
     _summarize_weather_correlation,
     _summarize_energy_anomaly_analysis
 )
+from ai.backend.ragflow_client import ragflow_client
 
 # ============================================================================
 # MCP 服务器初始化
@@ -333,33 +335,26 @@ def energy_anomaly_analysis(
 
 
 @mcp.tool()
-def search_domain_knowledge(query: str, top_k: int = 3) -> str:
+def search_domain_knowledge(query: str, top_k: int = 3) -> dict[str, Any]:
     """检索建筑运维知识库。
 
     通过 RAGFlow 知识库搜索与查询相关的建筑运维手册、设备说明、技术规范等内容，
-    返回最相关的文档摘录。常用于快速查询设备故障排除、规范要求、最佳实践等。
+    返回结构化的知识片段和文档聚合信息。该工具只负责检索证据，不负责生成最终回答，
+    适合让上层模型按需调用，再自行决定是否基于这些证据继续作答。
     """
-    import sys
-    import os
-    # 确保可导入 ai.backend 模块。
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    backend_dir = os.path.dirname(os.path.dirname(current_dir))
-    if backend_dir not in sys.path:
-        sys.path.insert(0, backend_dir)
-        
-    from ai.backend.ragflow_client import ragflow_client
-    chunks = ragflow_client.retrieve_chunks(question=query, top_k=top_k)
-    
-    if not chunks:
-        return "No relevant knowledge found in the knowledge base."
-        
-    results = []
-    for i, c in enumerate(chunks, 1):
-        doc_name = c.get('document_keyword') or c.get('document_name') or 'Unknown Document'
-        content = c.get('content', '')
-        results.append(f"--- Document {i}: {doc_name} ---\n{content}\n")
-    
-    return "\n".join(results)
+    normalized_query = query.strip()
+    if not normalized_query:
+        raise ValueError("query 不能为空字符串。")
+    safe_top_k = _validate_positive_int("top_k", top_k, minimum=1, maximum=10)
+    references = ragflow_client.retrieve_references(
+        question=normalized_query,
+        top_k=safe_top_k,
+    )
+    return _summarize_domain_knowledge(
+        references,
+        query=normalized_query,
+        top_k=safe_top_k,
+    )
 
 
 if __name__ == "__main__":

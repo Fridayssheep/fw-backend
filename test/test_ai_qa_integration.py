@@ -29,33 +29,22 @@ def build_report_path() -> Path:
 
 
 def direct_ragflow_check() -> dict[str, Any]:
-    """直接调用 RAGFlow，用于区分是后端问题还是上游问题。"""
+    """直接调用 RAGFlow retrieval，用于区分是后端问题还是上游问题。"""
 
     from ai.backend.ragflow_client import RagFlowClient
 
     ragflow_api_url = get_required_env("RAGFLOW_API_URL")
     ragflow_api_key = get_required_env("RAGFLOW_API_KEY")
     question = get_required_env("AI_QA_TEST_QUESTION")
-    chat_id = get_required_env("RAGFLOW_DEFAULT_CHAT_ID")
-    session_id = os.getenv("AI_QA_TEST_SESSION_ID", "").strip() or None
 
     client = RagFlowClient(api_url=ragflow_api_url, api_key=ragflow_api_key)
     retrieval_result = client.retrieve_references(
         question=question,
         top_k=5,
     )
-    chat_result = client.chat_completion(
-        question=question,
-        chat_id=chat_id,
-        session_id=session_id,
-    )
     return {
-        "answer_preview": (chat_result.get("answer") or "")[:200],
-        "session_id": chat_result.get("session_id"),
         "retrieval_reference_chunk_count": len((retrieval_result or {}).get("chunks", [])),
         "retrieval_reference_doc_count": len((retrieval_result or {}).get("doc_aggs", [])),
-        "chat_reference_chunk_count": len((chat_result.get("references") or {}).get("chunks", [])),
-        "chat_reference_doc_count": len((chat_result.get("references") or {}).get("doc_aggs", [])),
     }
 
 
@@ -86,12 +75,19 @@ def backend_http_check() -> dict[str, Any]:
 
     if response.status_code == 200 and isinstance(body, dict):
         references = body.get("references") or {}
+        knowledge_references = references.get("knowledge") or []
+        data_references = references.get("data") or []
+        history_references = references.get("history_cases") or []
         result["answer_preview"] = (body.get("answer") or "")[:200]
-        result["session_id"] = body.get("session_id")
-        result["reference_chunk_count"] = len(references.get("chunks", []))
-        result["reference_doc_count"] = len(references.get("doc_aggs", []))
+        result["question_type"] = body.get("question_type")
+        result["knowledge_reference_count"] = len(knowledge_references)
+        result["data_reference_count"] = len(data_references)
+        result["history_reference_count"] = len(history_references)
+        result["used_tools"] = [item.get("tool_name") for item in (body.get("used_tools") or []) if isinstance(item, dict)]
+        result["suggested_actions"] = [item.get("target") for item in (body.get("suggested_actions") or []) if isinstance(item, dict)]
         result["provider"] = (body.get("meta") or {}).get("provider")
-        result["used_openai_compatible"] = (body.get("meta") or {}).get("used_openai_compatible")
+        result["model"] = (body.get("meta") or {}).get("model")
+        result["has_references"] = (body.get("meta") or {}).get("has_references")
 
     return result
 

@@ -424,38 +424,61 @@ class AnomalyFeedbackResponse(BaseModel):
 
 class AIQARequest(BaseModel):
     question: str = Field(..., description="用户提出的问题")
-    session_id: str | None = Field(None, description="会话 ID，用于保持多轮对话上下文")
+    session_id: str | None = Field(None, description="前端侧会话 ID，用于自行维持会话上下文")
+    context: "AIQAContext | None" = Field(None, description="当前页面和业务对象上下文")
 
 
-class AIQAReferenceChunk(BaseModel):
-    chunk_id: str | None = Field(None, description="知识片段 ID")
-    document_id: str | None = Field(None, description="文档 ID")
-    document_name: str | None = Field(None, description="文档名称")
-    dataset_id: str | None = Field(None, description="知识库 ID")
-    content: str = Field(default="", description="知识片段内容")
-    similarity: float | None = Field(None, description="相似度分数")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="原始元数据")
+class AIQAContext(BaseModel):
+    page: str | None = Field(None, description="当前页面标识，例如 dashboard、device_detail、anomaly_detail")
+    building_id: str | None = Field(None, description="当前建筑 ID")
+    device_id: str | None = Field(None, description="当前设备 ID")
+    anomaly_id: str | None = Field(None, description="当前异常 ID")
+    meter: str | None = Field(None, description="当前表计类型")
+    time_range: TimeRange | None = Field(None, description="当前页面绑定的时间范围")
 
 
-class AIQAReferenceDocAgg(BaseModel):
-    document_id: str | None = Field(None, description="文档 ID")
-    document_name: str | None = Field(None, description="文档名称")
-    count: int | None = Field(None, description="命中的片段数量")
+class AIReferenceItem(BaseModel):
+    source_type: str = Field(..., description="证据来源类型：knowledge / data / history_case")
+    document_id: str | None = Field(None, description="来源对象 ID")
+    document_name: str | None = Field(None, description="文档名、图表名或案例标题")
+    chunk_id: str | None = Field(None, description="知识片段 ID；若不是知识库来源可为空")
+    snippet: str = Field(..., description="给前端展示的精简证据摘要")
+    score: float | None = Field(None, description="可选分值，例如检索相似度或证据权重")
 
 
-class AIQAReference(BaseModel):
-    chunks: list[AIQAReferenceChunk] = Field(default_factory=list, description="引用的知识片段")
-    doc_aggs: list[AIQAReferenceDocAgg] = Field(default_factory=list, description="按文档聚合的命中信息")
+class AIQAReferences(BaseModel):
+    knowledge: list[AIReferenceItem] = Field(default_factory=list, description="知识库证据")
+    data: list[AIReferenceItem] = Field(default_factory=list, description="数据查询或图表类证据")
+    history_cases: list[AIReferenceItem] = Field(default_factory=list, description="历史反馈或历史案例证据")
+
+
+class AIUsedToolItem(BaseModel):
+    tool_name: str = Field(..., description="实际调用的工具名")
+    tool_type: str = Field(..., description="工具类型：mcp / backend_api / internal_service / llm")
+    reason: str | None = Field(None, description="调用该工具的原因说明")
+
+
+class AISuggestedAction(BaseModel):
+    label: str = Field(..., description="给前端展示的动作名称")
+    action_type: str = Field(..., description="动作类型：open_page / call_api / view_reference / none")
+    target: str | None = Field(None, description="动作目标标识，由前端自行映射")
 
 
 class AIQAMeta(BaseModel):
-    provider: str = Field(..., description="上游知识问答服务提供方")
-    chat_id: str | None = Field(None, description="RAGFlow Chat ID")
-    used_openai_compatible: bool = Field(default=True, description="是否使用 OpenAI-compatible 接口")
+    provider: str = Field(..., description="本次回答的总体提供方式，例如 orchestrated")
+    model: str | None = Field(None, description="最终生成答案的模型名")
+    generated_at: datetime = Field(..., description="生成时间")
+    used_tools_count: int = Field(default=0, description="本次实际调用的工具数量")
+    has_references: bool = Field(default=False, description="本次回答是否附带证据引用")
 
 
 class AIQAResponse(BaseModel):
     answer: str = Field(..., description="AI 的回答")
-    session_id: str | None = Field(None, description="当前会话 ID")
-    references: AIQAReference = Field(default_factory=AIQAReference, description="知识库引用信息")
+    question_type: str = Field(..., description="问题类型：knowledge / fault_analysis / data_query / mixed / other")
+    references: AIQAReferences = Field(default_factory=AIQAReferences, description="统一证据引用信息")
+    used_tools: list[AIUsedToolItem] = Field(default_factory=list, description="本次回答实际使用的工具")
+    suggested_actions: list[AISuggestedAction] = Field(default_factory=list, description="前端可选后续动作")
     meta: AIQAMeta = Field(..., description="调用元信息")
+
+
+AIQARequest.model_rebuild()

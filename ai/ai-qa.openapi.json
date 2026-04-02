@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Building Energy AI QA API",
-    "version": "0.2.0",
-    "description": "Standalone OpenAPI definition for the current /ai/qa implementation. The endpoint uses a two-stage flow: RAGFlow retrieval for references and RAGFlow chats_openai for answer generation."
+    "version": "0.3.0-planned",
+    "description": "Planned standalone OpenAPI definition for the new /ai/qa orchestration endpoint. This endpoint acts as the unified AI entry for knowledge-base Q&A, fault-analysis guidance, energy-data retrieval assistance, and other mixed user intents. Internally it may call multiple tools such as RAG retrieval, anomaly analysis, query assistant, or energy APIs, but the frontend consumes a single normalized response."
   },
   "tags": [
     {
@@ -16,9 +16,9 @@
         "tags": [
           "AI"
         ],
-        "summary": "通用知识/运维库 AI 问答",
-        "description": "针对建筑运维知识库执行问答。后端先通过 RAGFlow retrieval 获取结构化引用，再通过 RAGFlow chats_openai 生成自然语言答案。响应中的 references 为轻量展示版，主要供前端显示引用卡片，不应用于向其他 AI 继续拼接大上下文。",
-        "operationId": "askAiQuestion",
+        "summary": "总览式 AI 问答入口",
+        "description": "统一接收用户问题，由后端 AI 编排层自主决定是否调用知识库检索、数据查询、异常分析或其他工具，并返回统一的答案、引用、已使用工具和建议动作。前端不直接感知内部使用了哪种工具或模型。",
+        "operationId": "aiQaOrchestrator",
         "requestBody": {
           "required": true,
           "content": {
@@ -27,59 +27,67 @@
                 "$ref": "#/components/schemas/AIQARequest"
               },
               "example": {
-                "question": "SLS单级单吸离心泵在正常工作时，对环境温度、海拔高度和相对湿度有什么具体要求？",
-                "session_id": null
+                "question": "这台泵在正常工作时，对环境温度、海拔高度和相对湿度有什么要求？",
+                "session_id": null,
+                "context": {
+                  "page": "device_detail",
+                  "building_id": "Bear_assembly_Angel",
+                  "device_id": "pump_sls_001",
+                  "meter": "electricity",
+                  "time_range": {
+                    "start": "2026-04-01T00:00:00+08:00",
+                    "end": "2026-04-02T00:00:00+08:00"
+                  }
+                }
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "问答成功，返回答案与轻量引用。",
+            "description": "AI 编排成功，返回统一答案与证据。",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AIQAResponse"
                 },
                 "example": {
-                  "answer": "知识库中明确提到：周围环境温度不超过40℃，相对湿度不超过95%，海拔高度不高于1000m。",
-                  "session_id": null,
+                  "answer": "根据知识库检索结果，这类泵正常工作时要求环境温度不超过40℃、海拔高度不高于1000m、相对湿度不超过95%。如果你想继续确认现场是否满足这些条件，可以进一步查看设备安装环境和近期告警记录。",
+                  "question_type": "knowledge",
                   "references": {
-                    "chunks": [
+                    "knowledge": [
                       {
-                        "chunk_id": "514aac2b96dab8ca",
+                        "source_type": "knowledge",
                         "document_id": "8fbe3ccc2b8511f186af3b6dbbaea58b",
                         "document_name": "SLS单级单吸离心泵.pdf",
-                        "dataset_id": "1b21a2082a8311f1864a971605e1c2d0",
-                        "content": "3、周围环境温度不超过40℃，相对湿度不超过95%。3.No larger than 40℃ of the ambient temperature, no higher than 1000m of the above-sea level and no more than 95% of the relative humidity.",
-                        "similarity": 0.3324,
-                        "metadata": {
-                          "doc_type_kwd": "",
-                          "image_id": "1b21a2082a8311f1864a971605e1c2d0-514aac2b96dab8ca",
-                          "positions": [
-                            [
-                              3,
-                              636,
-                              879,
-                              224,
-                              240
-                            ]
-                          ]
-                        }
+                        "chunk_id": "514aac2b96dab8ca",
+                        "snippet": "3、周围环境温度不超过40℃，相对湿度不超过95%。3.No larger than 40℃ of the ambient temperature, no higher than 1000m of the above-sea level and no more than 95% of the relative humidity.",
+                        "score": 0.3324
                       }
                     ],
-                    "doc_aggs": [
-                      {
-                        "document_id": "8fbe3ccc2b8511f186af3b6dbbaea58b",
-                        "document_name": "SLS单级单吸离心泵.pdf",
-                        "count": 5
-                      }
-                    ]
+                    "data": [],
+                    "history_cases": []
                   },
+                  "used_tools": [
+                    {
+                      "tool_name": "search_domain_knowledge",
+                      "tool_type": "mcp",
+                      "reason": "问题属于设备知识与规范查询，需要先检索知识库证据。 "
+                    }
+                  ],
+                  "suggested_actions": [
+                    {
+                      "label": "查看知识来源",
+                      "action_type": "view_reference",
+                      "target": "knowledge_reference_panel"
+                    }
+                  ],
                   "meta": {
-                    "provider": "ragflow",
-                    "chat_id": "ea44b4242d9b11f180683fca53910d59",
-                    "used_openai_compatible": true
+                    "provider": "orchestrated",
+                    "model": "to_be_decided",
+                    "generated_at": "2026-04-02T16:40:00+08:00",
+                    "used_tools_count": 1,
+                    "has_references": true
                   }
                 }
               }
@@ -108,41 +116,16 @@
               }
             }
           },
-          "502": {
-            "description": "RAGFlow 鉴权失败、资源不存在或上游返回非法结构",
+          "500": {
+            "description": "内部编排或模型调用失败",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPExceptionDetail"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 },
                 "example": {
-                  "detail": "RAGFlow 上游服务异常: HTTP 500。"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "RAGFlow 配置缺失",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPExceptionDetail"
-                },
-                "example": {
-                  "detail": "RAGFlow API key 未配置。"
-                }
-              }
-            }
-          },
-          "504": {
-            "description": "RAGFlow 请求超时",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPExceptionDetail"
-                },
-                "example": {
-                  "detail": "RAGFlow 请求超时。"
+                  "code": "internal_error",
+                  "message": "AI orchestration failed."
                 }
               }
             }
@@ -153,198 +136,25 @@
   },
   "components": {
     "schemas": {
-      "AIQARequest": {
+      "ErrorResponse": {
         "type": "object",
         "properties": {
-          "question": {
-            "type": "string",
-            "description": "用户提出的问题。"
+          "code": {
+            "type": "string"
           },
-          "session_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "可选的会话 ID。当前后端保留该字段，但上游 RAGFlow 官方 chats_openai 文档未明确保证会话续接语义。",
-            "default": null
+          "message": {
+            "type": "string"
           }
         },
         "required": [
-          "question"
-        ]
-      },
-      "AIQAReferenceChunk": {
-        "type": "object",
-        "properties": {
-          "chunk_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "知识片段 ID。"
-          },
-          "document_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "文档 ID。"
-          },
-          "document_name": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "文档名称。"
-          },
-          "dataset_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "知识库 ID。"
-          },
-          "content": {
-            "type": "string",
-            "description": "裁剪后的引用片段内容，当前最长约 600 字。"
-          },
-          "similarity": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "description": "检索相似度分数。"
-          },
-          "metadata": {
-            "type": "object",
-            "description": "仅保留给前端展示有价值的少量元数据。",
-            "additionalProperties": true,
-            "default": {}
-          }
-        },
-        "required": [
-          "chunk_id",
-          "document_id",
-          "document_name",
-          "dataset_id",
-          "content",
-          "similarity",
-          "metadata"
-        ]
-      },
-      "AIQAReferenceDocAgg": {
-        "type": "object",
-        "properties": {
-          "document_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "document_name": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "count": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "description": "命中的片段数量。"
-          }
-        },
-        "required": [
-          "document_id",
-          "document_name",
-          "count"
-        ]
-      },
-      "AIQAReference": {
-        "type": "object",
-        "properties": {
-          "chunks": {
-            "type": "array",
-            "description": "轻量引用片段列表，当前最多返回 5 条。",
-            "items": {
-              "$ref": "#/components/schemas/AIQAReferenceChunk"
-            },
-            "default": []
-          },
-          "doc_aggs": {
-            "type": "array",
-            "description": "按文档聚合的命中信息，当前最多返回 5 条。",
-            "items": {
-              "$ref": "#/components/schemas/AIQAReferenceDocAgg"
-            },
-            "default": []
-          }
-        },
-        "required": [
-          "chunks",
-          "doc_aggs"
-        ]
-      },
-      "AIQAMeta": {
-        "type": "object",
-        "properties": {
-          "provider": {
-            "type": "string",
-            "description": "上游知识问答服务提供方。"
-          },
-          "chat_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "当前使用的 RAGFlow Chat ID。"
-          },
-          "used_openai_compatible": {
-            "type": "boolean",
-            "description": "是否通过 RAGFlow OpenAI-compatible 聊天接口生成答案。",
-            "default": true
-          }
-        },
-        "required": [
-          "provider",
-          "chat_id",
-          "used_openai_compatible"
-        ]
-      },
-      "AIQAResponse": {
-        "type": "object",
-        "properties": {
-          "answer": {
-            "type": "string",
-            "description": "AI 生成的回答。"
-          },
-          "session_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "当前会话 ID。若上游未返回，则可能为 null。"
-          },
-          "references": {
-            "$ref": "#/components/schemas/AIQAReference"
-          },
-          "meta": {
-            "$ref": "#/components/schemas/AIQAMeta"
-          }
-        },
-        "required": [
-          "answer",
-          "session_id",
-          "references",
-          "meta"
+          "code",
+          "message"
         ]
       },
       "HTTPExceptionDetail": {
         "type": "object",
         "properties": {
           "detail": {
-            "description": "FastAPI/HTTPException 返回的 detail 字段。可能是字符串，也可能是校验错误数组。",
             "oneOf": [
               {
                 "type": "string"
@@ -361,6 +171,342 @@
         },
         "required": [
           "detail"
+        ]
+      },
+      "TimeRange": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ]
+      },
+      "AIQAContext": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "当前前端页面标识，例如 dashboard、device_detail、anomaly_detail。"
+          },
+          "building_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "anomaly_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "meter": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "time_range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TimeRange"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "page",
+          "building_id",
+          "device_id",
+          "anomaly_id",
+          "meter",
+          "time_range"
+        ]
+      },
+      "AIQARequest": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "用户提出的自然语言问题。"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "可选的前端会话 ID。用于前端维持自己的会话，不要求与具体上游模型或工具的一致 session 语义绑定。",
+            "default": null
+          },
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AIQAContext"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "前端可选上下文，用于帮助 AI 编排层理解当前页面和业务对象。"
+          }
+        },
+        "required": [
+          "question"
+        ]
+      },
+      "AIReferenceItem": {
+        "type": "object",
+        "properties": {
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "knowledge",
+              "data",
+              "history_case"
+            ],
+            "description": "证据来源类型。"
+          },
+          "document_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "文档或来源对象 ID。"
+          },
+          "document_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "文档名、图表名或案例标题。"
+          },
+          "chunk_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "知识片段 ID；若不是知识库来源可为空。"
+          },
+          "snippet": {
+            "type": "string",
+            "description": "给前端展示的精简证据摘要。"
+          },
+          "score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "可选的相似度、置信度或相关分值。"
+          }
+        },
+        "required": [
+          "source_type",
+          "document_id",
+          "document_name",
+          "chunk_id",
+          "snippet",
+          "score"
+        ]
+      },
+      "AIQAReferences": {
+        "type": "object",
+        "properties": {
+          "knowledge": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AIReferenceItem"
+            },
+            "default": [],
+            "description": "知识库证据。"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AIReferenceItem"
+            },
+            "default": [],
+            "description": "数据查询或图表类证据。"
+          },
+          "history_cases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AIReferenceItem"
+            },
+            "default": [],
+            "description": "历史反馈或历史案例证据。"
+          }
+        },
+        "required": [
+          "knowledge",
+          "data",
+          "history_cases"
+        ]
+      },
+      "AIUsedToolItem": {
+        "type": "object",
+        "properties": {
+          "tool_name": {
+            "type": "string",
+            "description": "实际调用的工具名。"
+          },
+          "tool_type": {
+            "type": "string",
+            "enum": [
+              "mcp",
+              "backend_api",
+              "internal_service",
+              "llm"
+            ],
+            "description": "工具类型。"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "调用该工具的原因说明。"
+          }
+        },
+        "required": [
+          "tool_name",
+          "tool_type",
+          "reason"
+        ]
+      },
+      "AISuggestedAction": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "给前端展示的动作名称。"
+          },
+          "action_type": {
+            "type": "string",
+            "enum": [
+              "open_page",
+              "call_api",
+              "view_reference",
+              "none"
+            ],
+            "description": "动作类型。"
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "动作目标标识，由前端自行映射。"
+          }
+        },
+        "required": [
+          "label",
+          "action_type",
+          "target"
+        ]
+      },
+      "AIQAMeta": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "本次回答的总体提供方式，例如 orchestrated。"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "最终生成答案的模型名。"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "used_tools_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "has_references": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "provider",
+          "model",
+          "generated_at",
+          "used_tools_count",
+          "has_references"
+        ]
+      },
+      "AIQAResponse": {
+        "type": "object",
+        "properties": {
+          "answer": {
+            "type": "string",
+            "description": "最终返回给前端展示的自然语言回答。"
+          },
+          "question_type": {
+            "type": "string",
+            "enum": [
+              "knowledge",
+              "fault_analysis",
+              "data_query",
+              "mixed",
+              "other"
+            ],
+            "description": "后端对本次问题的大类判断。"
+          },
+          "references": {
+            "$ref": "#/components/schemas/AIQAReferences"
+          },
+          "used_tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AIUsedToolItem"
+            },
+            "default": []
+          },
+          "suggested_actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AISuggestedAction"
+            },
+            "default": []
+          },
+          "meta": {
+            "$ref": "#/components/schemas/AIQAMeta"
+          }
+        },
+        "required": [
+          "answer",
+          "question_type",
+          "references",
+          "used_tools",
+          "suggested_actions",
+          "meta"
         ]
       }
     }
