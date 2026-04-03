@@ -470,6 +470,10 @@ class AIQAMeta(BaseModel):
     generated_at: datetime = Field(..., description="生成时间")
     used_tools_count: int = Field(default=0, description="本次实际调用的工具数量")
     has_references: bool = Field(default=False, description="本次回答是否附带证据引用")
+    stage_timings_ms: dict[str, int] = Field(
+        default_factory=dict,
+        description="本次回答各阶段耗时，单位毫秒，例如 retrieval_ms、query_assistant_ms、anomaly_analysis_ms、mixed_synthesis_ms、total_ms",
+    )
 
 
 class AIQAResponse(BaseModel):

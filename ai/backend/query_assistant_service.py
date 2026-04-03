@@ -372,10 +372,51 @@ def _build_fallback_response(
     )
 
 
+def _should_use_rule_only(payload: AIQueryAssistantRequest, fallback_intent: AIQueryIntent) -> bool:
+    """判断当前问题是否足够简单，可直接使用规则结果。"""
+
+    endpoint = _recommend_endpoint(payload.question, fallback_intent)
+    lowered = payload.question.lower()
+
+    if endpoint not in {"/energy/query", "/energy/trend"}:
+        return False
+
+    complex_markers = (
+        "对比",
+        "比较",
+        "排行",
+        "排名",
+        "top",
+        "vs",
+        "weather",
+        "天气",
+        "相关性",
+        "异常",
+        "诊断",
+        "告警",
+        "并且",
+        "同时",
+        "以及",
+        "顺便",
+        "另外",
+    )
+    if any(marker in lowered for marker in complex_markers):
+        return False
+
+    return True
+
+
 def build_query_intent(payload: AIQueryAssistantRequest) -> AIQueryAssistantResponse:
     """查询助手主入口：将自然语言解析为结构化查询意图。"""
     settings = get_ai_settings()
     fallback_intent, fallback_warnings = _build_fallback_intent(payload)
+    if _should_use_rule_only(payload, fallback_intent):
+        return _build_fallback_response(
+            payload=payload,
+            fallback_intent=fallback_intent,
+            fallback_warnings=fallback_warnings,
+            settings_model=settings.llm_model,
+        )
     try:
         system_prompt, user_prompt = build_query_assistant_prompts(
             question=payload.question,
