@@ -5,16 +5,16 @@ from typing import Any
 
 from .database import fetch_all
 from .database import fetch_one
-from .schemas import MaintenanceRecord
-from .schemas import MaintenanceRecordListResponse
-from .schemas import Meter
-from .schemas import MeterAlarm
-from .schemas import MeterAlarmListResponse
-from .schemas import MeterDetailResponse
-from .schemas import MeterListResponse
-from .schemas import MeterStatus
-from .schemas import MetricCard
-from .schemas import Pagination
+from .schemas_common import MetricCard
+from .schemas_common import Pagination
+from .schemas_meters import MaintenanceRecord
+from .schemas_meters import MaintenanceRecordListResponse
+from .schemas_meters import Meter
+from .schemas_meters import MeterAlarm
+from .schemas_meters import MeterAlarmListResponse
+from .schemas_meters import MeterDetailResponse
+from .schemas_meters import MeterListResponse
+from .schemas_meters import MeterStatus
 from .service_common import ResourceNotFoundError
 from .service_common import get_latest_timestamp
 from .service_common import get_meter_unit

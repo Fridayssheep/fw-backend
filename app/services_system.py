@@ -1,5 +1,5 @@
 from .database import fetch_scalar  # 导入单值查询函数，用于做数据库探活。
-from .schemas import SystemHealth  # 导入健康检查响应模型。
+from .schemas_system import SystemHealth  # 导入健康检查响应模型。
 from .service_common import get_taipei_now  # 导入获取台湾标准时间的函数。
 
 
