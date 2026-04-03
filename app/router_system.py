@@ -1,6 +1,6 @@
 from fastapi import APIRouter  # 导入 APIRouter，方便把 system 路由单独拆分管理。
 
-from .schemas import SystemHealth  # 导入健康检查响应模型。
+from .schemas_system import SystemHealth  # 导入健康检查响应模型。
 from .services_system import get_system_health as get_system_health_service  # 导入 system 领域的健康检查业务函数。
 
 

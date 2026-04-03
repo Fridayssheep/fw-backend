@@ -5,10 +5,11 @@ from fastapi.responses import JSONResponse
 
 from .router_ai import router as ai_router
 from .router_buildings import router as buildings_router
+from .router_dashboard import router as dashboard_router
 from .router_meters import router as meters_router
 from .router_energy import router as energy_router
 from .router_system import router as system_router
-from .schemas import ErrorResponse
+from .schemas_common import ErrorResponse
 from .service_common import ResourceNotFoundError
 
 
@@ -45,6 +46,7 @@ def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
 
 app.include_router(system_router)
 app.include_router(buildings_router)
+app.include_router(dashboard_router)
 app.include_router(meters_router)
 app.include_router(energy_router)
 app.include_router(ai_router)
