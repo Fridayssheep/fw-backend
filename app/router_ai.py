@@ -74,17 +74,16 @@ def submit_anomaly_feedback_api(payload: AnomalyFeedbackRequest) -> AnomalyFeedb
 
 
 # ============================================================================
-# 通用知识库 Q&A 接口 - 基于 RAGFlow
+# 总览式 AI 问答入口
 # ============================================================================
 
 
-@router.post("/ai/qa", response_model=AIQAResponse, summary="通用知识/运维库 AI 问答")
+@router.post("/ai/qa", response_model=AIQAResponse, summary="总览式 AI 问答入口")
 def ask_ai_question_api(payload: AIQARequest) -> AIQAResponse:
-    """建筑运维/设备知识库 Q&A 接口。
+    """总览式 AI 问答接口。
 
-    基于 RAGFlow 知识库（如建筑运维手册、设备使用说明等），
-    直接对用户提出的问题进行检索增强生成（RAG），返回知识库中最相关的答案。
-    支持会话级别的 session_id 用于维持上下文。
+    统一接收用户问题，并根据问题类型自主选择知识检索、查询意图解析、
+    异常分析等能力，再把答案、证据引用、已使用工具和建议动作统一返回给前端。
     """
     try:
         return ask_ai_question(payload)

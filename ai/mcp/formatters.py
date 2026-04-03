@@ -1,6 +1,167 @@
 from typing import Any
 from ai.mcp.utils import _build_tool_result, _format_number
 
+
+def _trim_knowledge_snippet(value: str, max_length: int = 400) -> str:
+    """裁剪知识片段，避免 MCP tool 把大段原文塞进上下文。"""
+
+    if len(value) <= max_length:
+        return value
+    return value[: max_length - 3].rstrip() + "..."
+
+
+def _summarize_domain_knowledge(
+    references: dict[str, Any],
+    *,
+    query: str,
+    top_k: int,
+) -> dict[str, Any]:
+    """格式化知识库检索结果，供 MCP 和上层模型稳定消费。"""
+
+    chunks = references.get("chunks", []) or []
+    doc_aggs = references.get("doc_aggs", []) or []
+
+    compact_chunks = []
+    for item in chunks[:top_k]:
+        compact_chunks.append(
+            {
+                "chunk_id": item.get("chunk_id"),
+                "document_id": item.get("document_id"),
+                "document_name": item.get("document_name"),
+                "dataset_id": item.get("dataset_id"),
+                "snippet": _trim_knowledge_snippet(str(item.get("content") or "")),
+                "score": item.get("similarity"),
+            }
+        )
+
+    compact_doc_aggs = []
+    for item in doc_aggs[:top_k]:
+        compact_doc_aggs.append(
+            {
+                "document_id": item.get("document_id"),
+                "document_name": item.get("document_name"),
+                "count": item.get("count"),
+            }
+        )
+
+    highlights = [
+        f"查询词: {query}",
+        f"命中片段数: {len(chunks)}",
+        f"命中文档数: {len(doc_aggs)}",
+        f"返回片段数: {len(compact_chunks)} / top_k={top_k}",
+    ]
+    if compact_doc_aggs:
+        top_doc = compact_doc_aggs[0]
+        highlights.append(
+            f"最高命中文档: {top_doc.get('document_name') or 'Unknown Document'}"
+        )
+
+    if compact_chunks:
+        summary = "已检索到相关知识库证据，可供上层模型基于证据继续作答。"
+        next_actions = [
+            "如需最终回答，请让上层模型基于 data.chunks 生成结论，并引用命中文档。",
+            "如需减少上下文，可优先只使用 data.doc_aggs 和前 1-3 条 chunks。",
+        ]
+        warnings: list[str] = []
+    else:
+        summary = "当前知识库中没有检索到相关证据。"
+        next_actions = [
+            "可以换一种问法重试，或转而调用数据分析/异常分析相关工具。",
+        ]
+        warnings = ["知识库未命中不代表结论为否，仅表示当前检索结果为空。"]
+
+    return _build_tool_result(
+        tool_name="search_domain_knowledge",
+        summary=summary,
+        highlights=highlights,
+        warnings=warnings,
+        next_actions=next_actions,
+        request_context={
+            "query": query,
+            "top_k": top_k,
+        },
+        data={
+            "chunks": compact_chunks,
+            "doc_aggs": compact_doc_aggs,
+        },
+    )
+
+
+def _summarize_domain_knowledge_answer(
+    result: dict[str, Any],
+    *,
+    question: str,
+    top_k: int,
+) -> dict[str, Any]:
+    """格式化基于 chats_openai 的知识问答结果。"""
+
+    answer = str(result.get("answer") or "").strip()
+    session_id = result.get("session_id")
+    references = result.get("references", {}) or {}
+    chunks = references.get("chunks", []) or []
+    doc_aggs = references.get("doc_aggs", []) or []
+
+    compact_chunks = []
+    for item in chunks[:top_k]:
+        compact_chunks.append(
+            {
+                "chunk_id": item.get("chunk_id"),
+                "document_id": item.get("document_id"),
+                "document_name": item.get("document_name"),
+                "dataset_id": item.get("dataset_id"),
+                "snippet": _trim_knowledge_snippet(str(item.get("content") or "")),
+                "score": item.get("similarity"),
+            }
+        )
+
+    compact_doc_aggs = []
+    for item in doc_aggs[:top_k]:
+        compact_doc_aggs.append(
+            {
+                "document_id": item.get("document_id"),
+                "document_name": item.get("document_name"),
+                "count": item.get("count"),
+            }
+        )
+
+    highlights = [
+        f"问题: {question}",
+        f"答案长度: {len(answer)}",
+        f"引用片段数: {len(chunks)}",
+        f"引用文档数: {len(doc_aggs)}",
+    ]
+    if session_id:
+        highlights.append(f"session_id: {session_id}")
+
+    warnings: list[str] = []
+    if not compact_chunks:
+        warnings.append("RAGFlow chats_openai 未返回结构化引用；如需稳定证据，请改用 search_domain_knowledge。")
+
+    next_actions = [
+        "如需稳定结构化证据，请补调 search_domain_knowledge。",
+        "如需前端展示引用，优先使用 retrieval 返回的 chunks/doc_aggs。",
+    ]
+
+    return _build_tool_result(
+        tool_name="answer_with_domain_knowledge",
+        summary="已基于知识库生成成品答案。",
+        highlights=highlights,
+        warnings=warnings,
+        next_actions=next_actions,
+        request_context={
+            "question": question,
+            "top_k": top_k,
+        },
+        data={
+            "answer": answer,
+            "session_id": session_id,
+            "references": {
+                "chunks": compact_chunks,
+                "doc_aggs": compact_doc_aggs,
+            },
+        },
+    )
+
 def _summarize_energy_query(
     response: dict[str, Any],
     *,

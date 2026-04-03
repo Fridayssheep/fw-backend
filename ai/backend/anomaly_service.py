@@ -56,25 +56,25 @@ def _build_default_candidate_causes(
     candidates = [
         AICandidateCause(
             cause_id="load_shift",
-            title="Load pattern shift",
-            description="Energy use deviates from the baseline and may be caused by an unusual demand change.",
+            title="负荷模式变化",
+            description="当前能耗与基线出现明显偏离，可能由节假日、排班调整或使用强度变化引起。",
             confidence=0.62,
             rank=1,
             recommended_checks=[
-                "Check whether occupancy or schedule changed during the anomaly window.",
-                "Compare the same period with the previous week.",
+                "核对异常时间段内的人员活动和排班是否有变化。",
+                "对比前一周或去年同期的同类时段负荷水平。",
             ],
             evidence_ids=["evi_data_anomaly"],
         ),
         AICandidateCause(
             cause_id="efficiency_drop",
-            title="Equipment efficiency drop",
-            description="Sustained high consumption may indicate lower operating efficiency or control drift.",
+            title="设备效率下降或控制漂移",
+            description="持续偏高或偏低的负荷，可能和设备效率下降、控制参数漂移或运行策略异常有关。",
             confidence=0.51,
             rank=2,
             recommended_checks=[
-                "Inspect equipment efficiency indicators and control setpoints.",
-                "Review recent maintenance or tuning changes.",
+                "检查主要设备的效率指标、控制设定值和启停逻辑。",
+                "回看最近是否有运维调参、维修或策略切换。",
             ],
             evidence_ids=["evi_data_anomaly"],
         ),
@@ -83,13 +83,13 @@ def _build_default_candidate_causes(
         candidates.append(
             AICandidateCause(
                 cause_id="weather_driven_load",
-                title="Weather-driven load increase",
-                description="Weather correlation suggests part of the anomaly may be explained by environmental conditions.",
+                title="天气驱动的负荷波动",
+                description="天气相关性提示当前异常中有一部分可能由室外环境变化带动，而非单纯设备故障。",
                 confidence=0.43,
                 rank=3,
                 recommended_checks=[
-                    "Review outdoor temperature and weather-related operating strategy.",
-                    "Check whether the building was in a peak weather period.",
+                    "结合室外温度和天气变化，检查运行策略是否同步调整。",
+                    "确认异常窗口是否处于极端气候或季节切换阶段。",
                 ],
                 evidence_ids=["evi_weather_corr"],
             )
@@ -98,13 +98,13 @@ def _build_default_candidate_causes(
         candidates.append(
             AICandidateCause(
                 cause_id="insufficient_signal",
-                title="Insufficient anomaly signal",
-                description="The current window does not provide strong enough evidence for a confident root-cause ranking.",
+                title="异常信号不足",
+                description="当前时间窗口中的异常信号不够强，暂时不足以支撑高置信度的根因排序。",
                 confidence=0.25,
                 rank=len(candidates) + 1,
                 recommended_checks=[
-                    "Expand the time window and compare with a longer baseline.",
-                    "Validate whether the selected meter has enough data coverage.",
+                    "扩大时间窗口后再与更长周期基线对比。",
+                    "确认当前表计数据覆盖是否完整，避免缺测影响判断。",
                 ],
                 evidence_ids=["evi_data_anomaly"],
             )
@@ -152,17 +152,17 @@ def _build_default_evidence(
 def _build_default_actions(request: AIAnalyzeAnomalyRequest) -> list[AIActionItem]:
     return [
         AIActionItem(
-            label="View anomaly trend",
+            label="查看异常趋势",
             action_type="open_tool",
             target="energy_trend",
         ),
         AIActionItem(
-            label="Submit operator feedback",
+            label="提交人工反馈",
             action_type="open_api",
             target="/ai/anomaly-feedback",
         ),
         AIActionItem(
-            label="Run weather correlation",
+            label="查看天气相关性",
             action_type="open_tool",
             target="energy_weather_correlation",
         ),
@@ -246,16 +246,41 @@ def _coerce_feedback_prompt(value: Any) -> AIFeedbackPrompt:
     if not isinstance(value, dict):
         return AIFeedbackPrompt(
             enabled=True,
-            message="Please select the most likely cause and rate the analysis result.",
+            message="请选择最符合现场情况的候选原因，并评价本次分析结果。",
             allow_score=True,
             allow_comment=True,
         )
     return AIFeedbackPrompt(
         enabled=bool(value.get("enabled", True)),
-        message=str(value.get("message") or "Please select the most likely cause and rate the analysis result."),
+        message=str(value.get("message") or "请选择最符合现场情况的候选原因，并评价本次分析结果。"),
         allow_score=bool(value.get("allow_score", True)),
         allow_comment=bool(value.get("allow_comment", True)),
     )
+
+
+def _build_fallback_answer(
+    anomaly_result: Any,
+    candidate_causes: list[AICandidateCause],
+    weather_result: WeatherCorrelationResponse | None,
+) -> str:
+    """构造给前端可直接展示的中文 fallback 诊断摘要。"""
+
+    segments = [f"根据当前异常检测结果，{anomaly_result.summary}"]
+
+    if candidate_causes:
+        top_causes = "；".join(
+            f"{item.title}（置信度 {item.confidence:.0%}）"
+            for item in candidate_causes[:2]
+        )
+        segments.append(f"当前优先怀疑的原因包括：{top_causes}。")
+
+    if weather_result is not None:
+        segments.append(
+            f"天气相关性系数约为 {weather_result.correlation_coefficient:.2f}，请结合现场运行工况综合判断。"
+        )
+
+    segments.append("这是一份基于结构化结果生成的辅助诊断建议，仍需结合现场排班、设备日志和运维记录进一步确认。")
+    return " ".join(segments)
 
 
 def _build_fallback_response(
@@ -269,26 +294,24 @@ def _build_fallback_response(
     """在 LLM 不可用或输出非法时，构造可落地的兜底响应。"""
     analysis_id = _build_analysis_id()
     generated_at = get_taipei_now()
+    candidate_causes = _build_default_candidate_causes(
+        anomaly_result=anomaly_result,
+        weather_result=weather_result,
+        max_candidate_causes=request.max_candidate_causes,
+    )
     return AIAnalyzeAnomalyResponse(
         analysis_id=analysis_id,
         status="needs_confirmation" if anomaly_result.is_anomalous else "low_confidence",
         summary=anomaly_result.summary,
-        answer=(
-            "The current response was generated by the fallback analyzer because the LLM result "
-            "was unavailable or invalid. Please treat the candidate causes as assisted diagnosis suggestions."
-        ),
-        candidate_causes=_build_default_candidate_causes(
-            anomaly_result=anomaly_result,
-            weather_result=weather_result,
-            max_candidate_causes=request.max_candidate_causes,
-        ),
+        answer=_build_fallback_answer(anomaly_result, candidate_causes, weather_result),
+        candidate_causes=candidate_causes,
         highlights=_collect_highlights(anomaly_result.summary, weather_result),
         evidence=_build_default_evidence(anomaly_result, weather_result, history_context),
         actions=_filter_allowed_actions(_build_default_actions(request), allowed_action_targets),
-        risk_notice="This output is a diagnosis suggestion and should not be treated as a confirmed fault.",
+        risk_notice="当前结果属于辅助诊断建议，不代表故障已经确认，请结合现场记录和人工排查进一步核实。",
         feedback_prompt=AIFeedbackPrompt(
             enabled=True,
-            message="Please select the most likely cause and rate the usefulness of this analysis.",
+            message="请选择最符合现场情况的候选原因，并反馈本次分析是否有帮助。",
             allow_score=True,
             allow_comment=True,
         ),
@@ -433,5 +456,4 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
             settings_model=settings.llm_model,
             allowed_action_targets=settings.ai_allowed_action_targets,
         )
-
 

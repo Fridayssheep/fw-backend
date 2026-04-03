@@ -21,6 +21,8 @@ from ai.mcp.utils import (
 from ai.mcp.client import _request_backend
 from ai.mcp.formatters import (
     _build_tool_result,
+    _summarize_domain_knowledge,
+    _summarize_domain_knowledge_answer,
     _summarize_energy_query,
     _summarize_energy_trend,
     _summarize_energy_compare,
@@ -28,6 +30,10 @@ from ai.mcp.formatters import (
     _summarize_energy_cop_demo,
     _summarize_weather_correlation,
     _summarize_energy_anomaly_analysis
+)
+from ai.backend.knowledge import (
+    answer_with_domain_knowledge as answer_with_domain_knowledge_result,
+    search_domain_knowledge_references,
 )
 
 # ============================================================================
@@ -333,33 +339,50 @@ def energy_anomaly_analysis(
 
 
 @mcp.tool()
-def search_domain_knowledge(query: str, top_k: int = 3) -> str:
+def search_domain_knowledge(query: str, top_k: int = 3) -> dict[str, Any]:
     """检索建筑运维知识库。
 
     通过 RAGFlow 知识库搜索与查询相关的建筑运维手册、设备说明、技术规范等内容，
-    返回最相关的文档摘录。常用于快速查询设备故障排除、规范要求、最佳实践等。
+    返回结构化的知识片段和文档聚合信息。该工具只负责检索证据，不负责生成最终回答，
+    适合让上层模型按需调用，再自行决定是否基于这些证据继续作答。
     """
-    import sys
-    import os
-    # 确保可导入 ai.backend 模块。
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    backend_dir = os.path.dirname(os.path.dirname(current_dir))
-    if backend_dir not in sys.path:
-        sys.path.insert(0, backend_dir)
-        
-    from ai.backend.ragflow_client import ragflow_client
-    chunks = ragflow_client.retrieve_chunks(question=query, top_k=top_k)
-    
-    if not chunks:
-        return "No relevant knowledge found in the knowledge base."
-        
-    results = []
-    for i, c in enumerate(chunks, 1):
-        doc_name = c.get('document_keyword') or c.get('document_name') or 'Unknown Document'
-        content = c.get('content', '')
-        results.append(f"--- Document {i}: {doc_name} ---\n{content}\n")
-    
-    return "\n".join(results)
+    normalized_query = query.strip()
+    if not normalized_query:
+        raise ValueError("query 不能为空字符串。")
+    safe_top_k = _validate_positive_int("top_k", top_k, minimum=1, maximum=10)
+    references = search_domain_knowledge_references(
+        normalized_query,
+        top_k=safe_top_k,
+    )
+    return _summarize_domain_knowledge(
+        references,
+        query=normalized_query,
+        top_k=safe_top_k,
+    )
+
+
+@mcp.tool()
+def answer_with_domain_knowledge(question: str, top_k: int = 3) -> dict[str, Any]:
+    """基于 RAGFlow 知识库直接生成答案。
+
+    该工具会调用 RAGFlow `chats_openai`，返回更接近最终用户可直接阅读的成品答案。
+    由于 chats_openai 的结构化引用不够稳定，这个工具适合“快速拿答案”，
+    但如果上层模型还需要稳定证据链，仍建议同时调用 `search_domain_knowledge`。
+    """
+
+    normalized_question = question.strip()
+    if not normalized_question:
+        raise ValueError("question 不能为空字符串。")
+
+    safe_top_k = _validate_positive_int("top_k", top_k, minimum=1, maximum=10)
+    result = answer_with_domain_knowledge_result(
+        normalized_question,
+    )
+    return _summarize_domain_knowledge_answer(
+        result,
+        question=normalized_question,
+        top_k=safe_top_k,
+    )
 
 
 if __name__ == "__main__":
