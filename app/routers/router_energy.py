@@ -5,22 +5,22 @@ from fastapi import Query  # 导入 Query，方便声明查询参数默认值和
 from fastapi import Request  # 导入 Request，方便手动读取重复 query 参数。
 from pydantic import BeforeValidator  # 导入前置校验器，方便兼容空字符串数字参数。
 
-from .service_common import coerce_blank_to_default  # 导入空字符串回退默认值函数。
-from .schemas_energy import CopAnalysisResponse  # 导入 COP 响应模型。
-from .schemas_energy import EnergyAnomalyAnalysisRequest  # 导入异常分析请求模型。
-from .schemas_energy import EnergyAnomalyAnalysisResponse  # 导入异常分析响应模型。
-from .schemas_energy import EnergyCompareResponse  # 导入能耗对比响应模型。
-from .schemas_energy import EnergyQueryResponse  # 导入能耗明细响应模型。
-from .schemas_energy import EnergyRankingResponse  # 导入能耗排行响应模型。
-from .schemas_energy import EnergyTrendResponse  # 导入能耗趋势响应模型。
-from .schemas_energy import WeatherCorrelationResponse  # 导入天气相关性响应模型。
-from .services_energy import get_energy_anomaly_analysis as get_energy_anomaly_analysis_service  # 导入异常分析业务函数。
-from .services_energy import get_energy_compare as get_energy_compare_service  # 导入能耗对比业务函数。
-from .services_energy import get_energy_cop as get_energy_cop_service  # 导入 COP 业务函数。
-from .services_energy import get_energy_query as get_energy_query_service  # 导入能耗明细业务函数。
-from .services_energy import get_energy_rankings as get_energy_rankings_service  # 导入能耗排行业务函数。
-from .services_energy import get_energy_trend as get_energy_trend_service  # 导入能耗趋势业务函数。
-from .services_energy import get_energy_weather_correlation as get_energy_weather_correlation_service  # 导入天气相关性业务函数。
+from app.services.service_common import coerce_blank_to_default  # 导入空字符串回退默认值函数。
+from app.schemas.schemas_energy import CopAnalysisResponse  # 导入 COP 响应模型。
+from app.schemas.schemas_energy import EnergyAnomalyAnalysisRequest  # 导入异常分析请求模型。
+from app.schemas.schemas_energy import EnergyAnomalyAnalysisResponse  # 导入异常分析响应模型。
+from app.schemas.schemas_energy import EnergyCompareResponse  # 导入能耗对比响应模型。
+from app.schemas.schemas_energy import EnergyQueryResponse  # 导入能耗明细响应模型。
+from app.schemas.schemas_energy import EnergyRankingResponse  # 导入能耗排行响应模型。
+from app.schemas.schemas_energy import EnergyTrendResponse  # 导入能耗趋势响应模型。
+from app.schemas.schemas_energy import WeatherCorrelationResponse  # 导入天气相关性响应模型。
+from app.services.services_anomaly import get_energy_anomaly_analysis as get_energy_anomaly_analysis_service  # 导入异常分析业务函数。
+from app.services.services_energy import get_energy_compare as get_energy_compare_service  # 导入能耗对比业务函数。
+from app.services.services_energy import get_energy_cop as get_energy_cop_service  # 导入 COP 业务函数。
+from app.services.services_energy import get_energy_query as get_energy_query_service  # 导入能耗明细业务函数。
+from app.services.services_energy import get_energy_rankings as get_energy_rankings_service  # 导入能耗排行业务函数。
+from app.services.services_energy import get_energy_trend as get_energy_trend_service  # 导入能耗趋势业务函数。
+from app.services.services_energy import get_energy_weather_correlation as get_energy_weather_correlation_service  # 导入天气相关性业务函数。
 
 
 router = APIRouter(tags=["Energy"])  # 创建 energy 分组路由对象，并统一设置文档标签。

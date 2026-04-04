@@ -3,18 +3,19 @@ from datetime import datetime
 from datetime import timedelta
 from typing import Any
 
-from .database import fetch_all
-from .database import fetch_one
-from .schemas_common import MetricCard
-from .schemas_common import Pagination
-from .schemas_meters import MaintenanceRecord
-from .schemas_meters import MaintenanceRecordListResponse
-from .schemas_meters import Meter
-from .schemas_meters import MeterAlarm
-from .schemas_meters import MeterAlarmListResponse
-from .schemas_meters import MeterDetailResponse
-from .schemas_meters import MeterListResponse
-from .schemas_meters import MeterStatus
+from .services_anomaly import build_meter_alarm_items, get_meter_alarms
+from app.core.database import fetch_all
+from app.core.database import fetch_one
+from app.schemas.schemas_common import MetricCard
+from app.schemas.schemas_common import Pagination
+from app.schemas.schemas_meters import MaintenanceRecord
+from app.schemas.schemas_meters import MaintenanceRecordListResponse
+from app.schemas.schemas_meters import Meter
+from app.schemas.schemas_meters import MeterAlarm, MeterAlarmLevel, MeterAlarmStatus
+from app.schemas.schemas_meters import MeterAlarm, MeterAlarmLevel, MeterAlarmStatusListResponse
+from app.schemas.schemas_meters import MeterDetailResponse
+from app.schemas.schemas_meters import MeterListResponse
+from app.schemas.schemas_meters import MeterStatus
 from .service_common import ResourceNotFoundError
 from .service_common import get_latest_timestamp
 from .service_common import get_meter_unit
@@ -142,64 +143,6 @@ def build_meter_recent_metrics(building_id: str, meter: str) -> list[MetricCard]
     ]
 
 
-def build_meter_alarm_items(building_id: str, meter: str) -> list[MeterAlarm]:
-    meter_row = get_meter_base_row_or_raise(building_id, meter)
-    window_end = meter_row.get("last_seen_at") or get_latest_timestamp([building_id], None, meter)
-    window_start = window_end - timedelta(days=METER_ALARM_LOOKBACK_DAYS)
-    rows = fetch_all(
-        """
-        SELECT
-            timestamp,
-            meter_reading
-        FROM meter_readings
-        WHERE building_id = :building_id
-          AND meter = :meter
-          AND timestamp >= :start_time
-          AND timestamp <= :end_time
-        ORDER BY timestamp DESC
-        """,
-        {"building_id": building_id, "meter": meter, "start_time": window_start, "end_time": window_end},
-    )
-    if not rows:
-        return []
-
-    values = [float(row["meter_reading"] or 0) for row in rows]
-    mean_value = sum(values) / len(values) if values else 0.0
-    variance = sum((value - mean_value) ** 2 for value in values) / len(values) if values else 0.0
-    std_value = math.sqrt(variance)
-    meter_id = build_meter_id(building_id, meter)
-    alarms: list[MeterAlarm] = []
-
-    for row in rows:
-        current_value = float(row["meter_reading"] or 0)
-        deviation_rate = abs(current_value - mean_value) / mean_value if mean_value else 0.0
-        z_score = abs(current_value - mean_value) / std_value if std_value else 0.0
-        if deviation_rate < 0.35 and z_score < 2.0:
-            continue
-
-        if deviation_rate >= 0.8 or z_score >= 3.0:
-            level = "critical"
-        elif deviation_rate >= 0.5 or z_score >= 2.5:
-            level = "warning"
-        else:
-            level = "info"
-
-        direction_label = "偏高" if current_value >= mean_value else "偏低"
-        alarm_status = "open" if row["timestamp"] >= window_end - timedelta(hours=24) else "closed"
-        alarms.append(
-            MeterAlarm(
-                alarm_id=f"{meter_id}{METER_ID_SEPARATOR}alarm{METER_ID_SEPARATOR}{row['timestamp'].strftime('%Y%m%d%H%M%S')}",
-                meter_id=meter_id,
-                level=level,
-                code="ENERGY_SPIKE" if current_value >= mean_value else "ENERGY_DROP",
-                message=f"{meter} 表计读数出现明显{direction_label}，当前值 {round(current_value, 4)}，相对均值偏离 {round(deviation_rate * 100, 2)}%。",
-                status=alarm_status,
-                occurred_at=require_api_datetime(row["timestamp"]),
-            )
-        )
-    return alarms
-
-
 def build_meter_maintenance_items(building_id: str, meter: str) -> list[MaintenanceRecord]:
     meter_row = get_meter_base_row_or_raise(building_id, meter)
     reference_time = meter_row.get("last_seen_at") or get_latest_timestamp([building_id], None, meter)
@@ -281,17 +224,6 @@ def get_meter_detail(meter_id: str) -> MeterDetailResponse:
         meter=meter_model,
         recent_alarms=recent_alarms,
         recent_metrics=recent_metrics,
-    )
-
-
-def get_meter_alarms(meter_id: str, page: int, page_size: int) -> MeterAlarmListResponse:
-    building_id, meter = parse_meter_id(meter_id)
-    items = build_meter_alarm_items(building_id, meter)
-    safe_page, safe_page_size, offset = normalize_pagination(page, page_size)
-    paged_items = items[offset : offset + safe_page_size]
-    return MeterAlarmListResponse(
-        items=paged_items,
-        pagination=Pagination(page=safe_page, page_size=safe_page_size, total=len(items)),
     )
 
 

@@ -12,14 +12,14 @@ from ai.backend.ragflow_client import RagFlowNotFoundError
 from ai.backend.ragflow_client import RagFlowTimeoutError
 from ai.backend.ragflow_client import RagFlowUpstreamError
 
-from .schemas_ai import AIAnalyzeAnomalyRequest
-from .schemas_ai import AIAnalyzeAnomalyResponse
-from .schemas_ai import AIQARequest
-from .schemas_ai import AIQAResponse
-from .schemas_ai import AIQueryAssistantRequest
-from .schemas_ai import AIQueryAssistantResponse
-from .schemas_ai import AnomalyFeedbackRequest
-from .schemas_ai import AnomalyFeedbackResponse
+from app.schemas.schemas_ai import AIAnalyzeAnomalyRequest
+from app.schemas.schemas_ai import AIAnalyzeAnomalyResponse
+from app.schemas.schemas_ai import AIQARequest
+from app.schemas.schemas_ai import AIQAResponse
+from app.schemas.schemas_ai import AIQueryAssistantRequest
+from app.schemas.schemas_ai import AIQueryAssistantResponse
+from app.schemas.schemas_ai import AnomalyFeedbackRequest
+from app.schemas.schemas_ai import AnomalyFeedbackResponse
 
 
 router = APIRouter(tags=["AI"])

@@ -3,12 +3,12 @@ from fastapi import Request
 from fastapi import status
 from fastapi.responses import JSONResponse
 
-from .router_ai import router as ai_router
-from .router_buildings import router as buildings_router
-from .router_dashboard import router as dashboard_router
-from .router_meters import router as meters_router
-from .router_energy import router as energy_router
-from .router_system import router as system_router
+from app.routers.router_ai import router as ai_router
+from app.routers.router_buildings import router as buildings_router
+from app.routers.router_dashboard import router as dashboard_router
+from app.routers.router_meters import router as meters_router
+from app.routers.router_energy import router as energy_router
+from app.routers.router_system import router as system_router
 from .schemas_common import ErrorResponse
 from .service_common import ResourceNotFoundError
 

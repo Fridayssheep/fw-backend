@@ -2,14 +2,14 @@ from datetime import datetime  # 导入日期时间类型，方便做 dashboard 
 from datetime import timedelta  # 导入时间差类型，方便构造上一统计周期。
 from typing import Any  # 导入任意类型注解，方便描述松散的中间数据结构。
 
-from .database import fetch_all  # 导入多行查询函数，方便查询建筑范围和聚合结果。
-from .database import fetch_one  # 导入单行查询函数，方便做建筑存在性检查。
-from .schemas_common import MetricCard  # 导入通用指标卡片模型，方便复用现有前端结构。
-from .schemas_dashboard import AnomalySummary  # 导入 dashboard 异常摘要模型。
-from .schemas_dashboard import DashboardHighlight  # 导入 dashboard 高亮模型。
-from .schemas_dashboard import DashboardHighlightsResponse  # 导入 dashboard 高亮列表响应模型。
-from .schemas_dashboard import DashboardHighlightType  # 导入 dashboard 高亮类型枚举。
-from .schemas_dashboard import DashboardOverviewResponse  # 导入 dashboard 总览响应模型。
+from app.core.database import fetch_all  # 导入多行查询函数，方便查询建筑范围和聚合结果。
+from app.core.database import fetch_one  # 导入单行查询函数，方便做建筑存在性检查。
+from app.schemas.schemas_common import MetricCard  # 导入通用指标卡片模型，方便复用现有前端结构。
+from app.schemas.schemas_dashboard import AnomalySummary  # 导入 dashboard 异常摘要模型。
+from app.schemas.schemas_dashboard import DashboardHighlight  # 导入 dashboard 高亮模型。
+from app.schemas.schemas_dashboard import DashboardHighlightsResponse  # 导入 dashboard 高亮列表响应模型。
+from app.schemas.schemas_dashboard import DashboardHighlightType  # 导入 dashboard 高亮类型枚举。
+from app.schemas.schemas_dashboard import DashboardOverviewResponse  # 导入 dashboard 总览响应模型。
 from .service_common import ResourceNotFoundError  # 导入资源不存在异常，方便返回一致的 404 语义。
 from .service_common import build_api_time_range  # 导入接口时间范围构造函数，方便统一输出台湾时区。
 from .service_common import require_api_datetime  # 导入必填时间转换函数，方便输出 API 时间。
