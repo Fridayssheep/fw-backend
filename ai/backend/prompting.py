@@ -62,6 +62,25 @@ QUERY_ASSISTANT_SYSTEM_PROMPT = """\
 """
 
 
+OPS_GUIDE_SYSTEM_PROMPT = """\
+你是“建筑能源智能运维指导助手”。
+
+你的任务是基于已补全的运维上下文、异常分析结论、知识库证据和历史经验，
+输出一份可执行、可交接、可追溯的运维指导。
+
+必须遵守以下规则：
+1. 不要把当前结果写成“已确认故障”，只能写成“排查建议”或“处置指导”。
+2. 先写最重要的主结论，再给步骤。
+3. steps 必须是结构化步骤，不要输出纯字符串数组。
+4. 步骤要可执行，优先写“先看什么、再查什么、如果不成立怎么办”。
+5. 如果异常发现来源是 z_score_detector / isolation_forest / missing_data_detector，要把它当成异常发现来源，不等于根因。
+6. 如果证据不足，status 使用 low_confidence；如果上下文不足，status 使用 needs_more_context；否则使用 actionable。
+7. 不要发明页面或接口名称，actions 只允许使用输入里给出的候选 target。
+8. 输出必须是合法 JSON，不要输出 Markdown，不要输出代码块。
+9. summary、preconditions、steps、risk_notice、applicability 全部使用简洁专业的中文。
+"""
+
+
 def _json_default_serializer(value: Any) -> Any:
     """JSON 序列化兜底：时间类型转 ISO 字符串。"""
     if isinstance(value, (datetime, date)):
@@ -291,6 +310,77 @@ def build_analyze_anomaly_prompts(
 {_json_block(output_schema_hint)}
 """
     return SYSTEM_PROMPT, user_prompt
+
+
+def build_ops_guide_prompts(
+    ops_context: dict[str, Any],
+    diagnosis_snapshot: dict[str, Any],
+    knowledge_items: list[dict[str, Any]],
+    history_items: list[dict[str, Any]],
+    allowed_action_targets: tuple[str, ...],
+) -> tuple[str, str]:
+    """构造运维指导提示词。"""
+
+    output_schema_hint = {
+        "status": "actionable",
+        "summary": "一句话概括当前最优先的排查方向",
+        "preconditions": [
+            "确认当前 building_id、meter 和时间范围无误"
+        ],
+        "steps": [
+            {
+                "step_id": "step_1",
+                "title": "先核查运行日历和排班变化",
+                "instruction": "对照异常时段确认是否存在节假日、调休或特殊运行安排。",
+                "priority": "high",
+                "expected_result": "判断是否属于业务侧导致的规律变化",
+                "if_not_met": "若无明显日历变化，继续核查设备启停和控制策略。"
+            }
+        ],
+        "risk_notice": [
+            "当前结果属于运维指导，不代表故障已确认。"
+        ],
+        "applicability": {
+            "applies_to": ["离线异常事件接手后的排查场景"],
+            "not_applies_to": ["缺少 building_id、meter、time_range 的泛化问答场景"]
+        }
+    }
+
+    allowed_targets_text = "\n".join(f"- {item}" for item in allowed_action_targets)
+    user_prompt = f"""\
+请根据下面已经补全的运维上下文，生成一份结构化运维指导。
+
+【运维上下文】
+{_json_block(ops_context)}
+
+【异常诊断快照】
+{_json_block(diagnosis_snapshot)}
+
+【知识证据】
+{_json_block(knowledge_items[:3])}
+
+【历史反馈摘要】
+{_json_block(history_items[:3])}
+
+【允许使用的 actions.target】
+{allowed_targets_text}
+
+【输出要求】
+1. 只输出一个合法 JSON 对象。
+2. 顶层字段必须严格包含：
+   status, summary, preconditions, steps, risk_notice, applicability
+3. steps 至少返回 2 步，最多返回 6 步。
+4. 每个 step 必须包含：
+   step_id, title, instruction, priority, expected_result, if_not_met
+5. priority 只能取 high / medium / low。
+6. 如果当前结论更接近运行规律偏移、采集异常或突发极值，请把这个判断体现在步骤顺序里。
+7. 如果知识证据不足，不要编造设备说明书结论。
+8. 不要输出 evidence、actions、meta，这些由后端根据结构化结果自行拼装。
+
+【输出 JSON 骨架示例】
+{_json_block(output_schema_hint)}
+"""
+    return OPS_GUIDE_SYSTEM_PROMPT, user_prompt
 
 
 def build_query_assistant_prompts(

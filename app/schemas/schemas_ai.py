@@ -158,6 +158,107 @@ class AnomalyFeedbackResponse(BaseModel):
     meta: AnomalyFeedbackMeta
 
 
+class AIOpsGuideIncidentRef(BaseModel):
+    incident_id: str | None = Field(None, description="故障/异常事件主键")
+    message_id: str | None = Field(None, description="消息中心消息 ID")
+
+
+class AIOpsGuideOperatorContext(BaseModel):
+    operator_id: str | None = Field(None, description="接手人 ID")
+    operator_name: str | None = Field(None, description="接手人名称")
+
+
+class AIOpsGuidePageContext(BaseModel):
+    source: str | None = Field(None, description="入口来源，如 message_center、anomaly_detail")
+    page_type: str | None = Field(None, description="当前页面类型")
+    current_chart_range: str | None = Field(None, description="当前图表时间范围标记")
+
+
+class AIOpsGuideAnomalySnapshotInput(BaseModel):
+    summary: str | None = Field(None, description="前端当前页面已有的异常摘要")
+    analysis_mode: str | None = Field(None, description="异常分析模式")
+    event_count: int | None = Field(None, description="当前页面已知异常事件数")
+    detector_breakdown: list[AnomalyDetectorBreakdownItem] = Field(default_factory=list, description="检测器分布")
+    event_ids: list[str] = Field(default_factory=list, description="当前页面已知异常事件 ID 列表")
+
+
+class AIOpsGuideContextInput(BaseModel):
+    building_id: str = Field(..., description="当前处理建筑 ID")
+    meter: str = Field(..., description="当前处理表计类型")
+    time_range: TimeRange = Field(..., description="当前处理时间范围")
+    incident_ref: AIOpsGuideIncidentRef | None = Field(None, description="可选的故障/消息引用")
+    page_context: AIOpsGuidePageContext | None = Field(None, description="页面来源和展示上下文")
+    operator_context: AIOpsGuideOperatorContext | None = Field(None, description="当前接手人信息")
+    anomaly_snapshot: AIOpsGuideAnomalySnapshotInput | None = Field(None, description="前端已有的异常快照")
+
+
+class AIOpsGuideRequest(BaseModel):
+    question: str | None = Field(None, description="可选补充问题，不传则使用默认运维指导问题")
+    guide_mode: str = Field(default="standard_sop", description="指导模式：quick_check / standard_sop / expert")
+    context: AIOpsGuideContextInput = Field(..., description="前端已知的最小故障上下文")
+    include_knowledge: bool = Field(default=True, description="是否补充知识库证据")
+    include_history: bool = Field(default=True, description="是否补充历史反馈经验")
+    include_actions: bool = Field(default=True, description="是否返回建议动作")
+
+
+class AIOpsGuideStep(BaseModel):
+    step_id: str = Field(..., description="步骤 ID")
+    title: str = Field(..., description="步骤标题")
+    instruction: str = Field(..., description="具体执行说明")
+    priority: str = Field(..., description="优先级：high / medium / low")
+    expected_result: str | None = Field(None, description="预期结果")
+    if_not_met: str | None = Field(None, description="未满足预期时的下一步")
+
+
+class AIOpsGuideEvidence(BaseModel):
+    source_type: str = Field(..., description="证据来源类型：data / knowledge / history_case")
+    source: str = Field(..., description="证据来源名")
+    snippet: str = Field(..., description="证据摘要")
+    score: float | None = Field(None, description="相关性或证据权重")
+
+
+class AIOpsGuideAction(BaseModel):
+    label: str = Field(..., description="动作文案")
+    action_type: str = Field(..., description="动作类型")
+    target: str | None = Field(None, description="动作目标")
+
+
+class AIOpsGuideApplicability(BaseModel):
+    applies_to: list[str] = Field(default_factory=list, description="适用场景")
+    not_applies_to: list[str] = Field(default_factory=list, description="不适用场景")
+
+
+class AIOpsGuideDiagnosisSnapshot(BaseModel):
+    analysis_mode: str = Field(default="offline_event_review", description="诊断分析模式")
+    event_count: int = Field(default=0, description="异常事件数量")
+    detector_breakdown: list[AnomalyDetectorBreakdownItem] = Field(default_factory=list, description="检测器分布")
+    candidate_cause_titles: list[str] = Field(default_factory=list, description="主要候选原因标题")
+
+
+class AIOpsGuideMeta(BaseModel):
+    generated_at: datetime = Field(..., description="生成时间")
+    model: str = Field(..., description="本次使用的主模型")
+    used_tools: list[str] = Field(default_factory=list, description="内部已使用工具")
+    context_source: str = Field(default="server_enriched", description="上下文补全来源")
+    knowledge_hits: int = Field(default=0, description="知识命中数")
+    history_feedback_hits: int = Field(default=0, description="历史反馈命中数")
+    stage_timings_ms: dict[str, int] = Field(default_factory=dict, description="分阶段耗时")
+
+
+class AIOpsGuideResponse(BaseModel):
+    incident_id: str | None = Field(None, description="故障/异常事件主键")
+    status: str = Field(..., description="结果状态：actionable / low_confidence / needs_more_context")
+    summary: str = Field(..., description="运维指导摘要")
+    preconditions: list[str] = Field(default_factory=list, description="执行前前置条件")
+    steps: list[AIOpsGuideStep] = Field(default_factory=list, description="结构化排查步骤")
+    evidence: list[AIOpsGuideEvidence] = Field(default_factory=list, description="关键证据")
+    actions: list[AIOpsGuideAction] = Field(default_factory=list, description="建议前端动作")
+    risk_notice: list[str] = Field(default_factory=list, description="风险提醒")
+    applicability: AIOpsGuideApplicability = Field(default_factory=AIOpsGuideApplicability, description="适用范围")
+    diagnosis_snapshot: AIOpsGuideDiagnosisSnapshot = Field(default_factory=AIOpsGuideDiagnosisSnapshot, description="诊断快照")
+    meta: AIOpsGuideMeta = Field(..., description="调用元信息")
+
+
 class AIQARequest(BaseModel):
     question: str = Field(..., description="用户提出的问题")
     session_id: str | None = Field(None, description="会话 ID，用于保持多轮对话上下文")

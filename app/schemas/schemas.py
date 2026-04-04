@@ -2,6 +2,19 @@ from .schemas_ai import AIActionItem
 from .schemas_ai import AIAnalyzeAnomalyMeta
 from .schemas_ai import AIAnalyzeAnomalyRequest
 from .schemas_ai import AIAnalyzeAnomalyResponse
+from .schemas_ai import AIOpsGuideAction
+from .schemas_ai import AIOpsGuideAnomalySnapshotInput
+from .schemas_ai import AIOpsGuideApplicability
+from .schemas_ai import AIOpsGuideContextInput
+from .schemas_ai import AIOpsGuideDiagnosisSnapshot
+from .schemas_ai import AIOpsGuideEvidence
+from .schemas_ai import AIOpsGuideIncidentRef
+from .schemas_ai import AIOpsGuideMeta
+from .schemas_ai import AIOpsGuideOperatorContext
+from .schemas_ai import AIOpsGuidePageContext
+from .schemas_ai import AIOpsGuideRequest
+from .schemas_ai import AIOpsGuideResponse
+from .schemas_ai import AIOpsGuideStep
 from .schemas_ai import AICandidateCause
 from .schemas_ai import AIEvidenceItem
 from .schemas_ai import AIFeedbackPrompt
@@ -78,6 +91,19 @@ __all__ = [
     "AIAnalyzeAnomalyMeta",
     "AIAnalyzeAnomalyRequest",
     "AIAnalyzeAnomalyResponse",
+    "AIOpsGuideAction",
+    "AIOpsGuideAnomalySnapshotInput",
+    "AIOpsGuideApplicability",
+    "AIOpsGuideContextInput",
+    "AIOpsGuideDiagnosisSnapshot",
+    "AIOpsGuideEvidence",
+    "AIOpsGuideIncidentRef",
+    "AIOpsGuideMeta",
+    "AIOpsGuideOperatorContext",
+    "AIOpsGuidePageContext",
+    "AIOpsGuideRequest",
+    "AIOpsGuideResponse",
+    "AIOpsGuideStep",
     "AnomalyDetectorBreakdownItem",
     "AICandidateCause",
     "AIEvidenceItem",

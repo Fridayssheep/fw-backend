@@ -3,6 +3,7 @@ from fastapi import HTTPException
 
 from ai.backend.anomaly_service import analyze_anomaly_with_ai
 from ai.backend.feedback_service import submit_anomaly_feedback
+from ai.backend.ops_guide_service import get_ops_guide
 from ai.backend.qa_service import ask_ai_question
 from ai.backend.query_assistant_service import build_query_intent
 from ai.backend.ragflow_client import RagFlowAuthenticationError
@@ -14,6 +15,8 @@ from ai.backend.ragflow_client import RagFlowUpstreamError
 
 from app.schemas.schemas_ai import AIAnalyzeAnomalyRequest
 from app.schemas.schemas_ai import AIAnalyzeAnomalyResponse
+from app.schemas.schemas_ai import AIOpsGuideRequest
+from app.schemas.schemas_ai import AIOpsGuideResponse
 from app.schemas.schemas_ai import AIQARequest
 from app.schemas.schemas_ai import AIQAResponse
 from app.schemas.schemas_ai import AIQueryAssistantRequest
@@ -71,6 +74,32 @@ def submit_anomaly_feedback_api(payload: AnomalyFeedbackRequest) -> AnomalyFeedb
     """
 
     return submit_anomaly_feedback(payload)
+
+
+# ============================================================================
+# 运维指导接口
+# ============================================================================
+
+
+@router.post("/ai/ops-guide", response_model=AIOpsGuideResponse, summary="AI 运维指导")
+def get_ai_ops_guide_api(payload: AIOpsGuideRequest) -> AIOpsGuideResponse:
+    """接手故障后的 AI 运维指导接口。
+
+    前端只需要传递当前页面已知的最小上下文，后端会在内部补全 ops_context，
+    复用异常分析、知识检索和历史反馈能力，输出步骤化运维指导。
+    """
+    try:
+        return get_ops_guide(payload)
+    except RagFlowConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RagFlowAuthenticationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RagFlowNotFoundError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RagFlowTimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+    except (RagFlowUpstreamError, RagFlowInvalidResponseError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 # ============================================================================

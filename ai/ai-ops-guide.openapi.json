@@ -1,0 +1,752 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Building Energy AI & Backend API",
+    "version": "0.3.0-local-impl",
+    "description": "Minimal runnable implementation for system, energy, buildings, meters, and AI routes."
+  },
+  "paths": {
+    "/ai/ops-guide": {
+      "post": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "AI 运维指导",
+        "description": "接手故障后的 AI 运维指导接口。\n\n前端只需要传递当前页面已知的最小上下文，后端会在内部补全 ops_context，\n复用异常分析、知识检索和历史反馈能力，输出步骤化运维指导。",
+        "operationId": "get_ai_ops_guide_api_ai_ops_guide_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIOpsGuideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIOpsGuideResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "AIOpsGuideRequest": {
+        "properties": {
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question",
+            "description": "可选补充问题，不传则使用默认运维指导问题"
+          },
+          "guide_mode": {
+            "type": "string",
+            "title": "Guide Mode",
+            "description": "指导模式：quick_check / standard_sop / expert",
+            "default": "standard_sop"
+          },
+          "context": {
+            "$ref": "#/components/schemas/AIOpsGuideContextInput",
+            "description": "前端已知的最小故障上下文"
+          },
+          "include_knowledge": {
+            "type": "boolean",
+            "title": "Include Knowledge",
+            "description": "是否补充知识库证据",
+            "default": true
+          },
+          "include_history": {
+            "type": "boolean",
+            "title": "Include History",
+            "description": "是否补充历史反馈经验",
+            "default": true
+          },
+          "include_actions": {
+            "type": "boolean",
+            "title": "Include Actions",
+            "description": "是否返回建议动作",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "context"
+        ],
+        "title": "AIOpsGuideRequest"
+      },
+      "AIOpsGuideContextInput": {
+        "properties": {
+          "building_id": {
+            "type": "string",
+            "title": "Building Id",
+            "description": "当前处理建筑 ID"
+          },
+          "meter": {
+            "type": "string",
+            "title": "Meter",
+            "description": "当前处理表计类型"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/TimeRange",
+            "description": "当前处理时间范围"
+          },
+          "incident_ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AIOpsGuideIncidentRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "可选的故障/消息引用"
+          },
+          "page_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AIOpsGuidePageContext"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "页面来源和展示上下文"
+          },
+          "operator_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AIOpsGuideOperatorContext"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "当前接手人信息"
+          },
+          "anomaly_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AIOpsGuideAnomalySnapshotInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "前端已有的异常快照"
+          }
+        },
+        "type": "object",
+        "required": [
+          "building_id",
+          "meter",
+          "time_range"
+        ],
+        "title": "AIOpsGuideContextInput"
+      },
+      "TimeRange": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Start"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time",
+            "title": "End"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "TimeRange"
+      },
+      "AIOpsGuidePageContext": {
+        "properties": {
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "入口来源，如 message_center、anomaly_detail"
+          },
+          "page_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Type",
+            "description": "当前页面类型"
+          },
+          "current_chart_range": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Chart Range",
+            "description": "当前图表时间范围标记"
+          }
+        },
+        "type": "object",
+        "title": "AIOpsGuidePageContext"
+      },
+      "AIOpsGuideOperatorContext": {
+        "properties": {
+          "operator_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator Id",
+            "description": "接手人 ID"
+          },
+          "operator_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator Name",
+            "description": "接手人名称"
+          }
+        },
+        "type": "object",
+        "title": "AIOpsGuideOperatorContext"
+      },
+      "AIOpsGuideAnomalySnapshotInput": {
+        "properties": {
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary",
+            "description": "前端当前页面已有的异常摘要"
+          },
+          "analysis_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Mode",
+            "description": "异常分析模式"
+          },
+          "event_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Count",
+            "description": "当前页面已知异常事件数"
+          },
+          "detector_breakdown": {
+            "items": {
+              "$ref": "#/components/schemas/AnomalyDetectorBreakdownItem"
+            },
+            "type": "array",
+            "title": "Detector Breakdown",
+            "description": "检测器分布"
+          },
+          "event_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Event Ids",
+            "description": "当前页面已知异常事件 ID 列表"
+          }
+        },
+        "type": "object",
+        "title": "AIOpsGuideAnomalySnapshotInput"
+      },
+      "AnomalyDetectorBreakdownItem": {
+        "properties": {
+          "detected_by": {
+            "type": "string",
+            "title": "Detected By"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detected_by",
+          "event_type",
+          "count"
+        ],
+        "title": "AnomalyDetectorBreakdownItem"
+      },
+      "AIOpsGuideIncidentRef": {
+        "properties": {
+          "incident_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incident Id",
+            "description": "故障/异常事件主键"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id",
+            "description": "消息中心消息 ID"
+          }
+        },
+        "type": "object",
+        "title": "AIOpsGuideIncidentRef"
+      },
+      "AIOpsGuideResponse": {
+        "properties": {
+          "incident_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incident Id",
+            "description": "故障/异常事件主键"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "结果状态：actionable / low_confidence / needs_more_context"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "description": "运维指导摘要"
+          },
+          "preconditions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Preconditions",
+            "description": "执行前前置条件"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/AIOpsGuideStep"
+            },
+            "type": "array",
+            "title": "Steps",
+            "description": "结构化排查步骤"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/AIOpsGuideEvidence"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "description": "关键证据"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/AIOpsGuideAction"
+            },
+            "type": "array",
+            "title": "Actions",
+            "description": "建议前端动作"
+          },
+          "risk_notice": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Risk Notice",
+            "description": "风险提醒"
+          },
+          "applicability": {
+            "$ref": "#/components/schemas/AIOpsGuideApplicability",
+            "description": "适用范围"
+          },
+          "diagnosis_snapshot": {
+            "$ref": "#/components/schemas/AIOpsGuideDiagnosisSnapshot",
+            "description": "诊断快照"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/AIOpsGuideMeta",
+            "description": "调用元信息"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "summary",
+          "meta"
+        ],
+        "title": "AIOpsGuideResponse"
+      },
+      "AIOpsGuideEvidence": {
+        "properties": {
+          "source_type": {
+            "type": "string",
+            "title": "Source Type",
+            "description": "证据来源类型：data / knowledge / history_case"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "description": "证据来源名"
+          },
+          "snippet": {
+            "type": "string",
+            "title": "Snippet",
+            "description": "证据摘要"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score",
+            "description": "相关性或证据权重"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_type",
+          "source",
+          "snippet"
+        ],
+        "title": "AIOpsGuideEvidence"
+      },
+      "AIOpsGuideDiagnosisSnapshot": {
+        "properties": {
+          "analysis_mode": {
+            "type": "string",
+            "title": "Analysis Mode",
+            "description": "诊断分析模式",
+            "default": "offline_event_review"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count",
+            "description": "异常事件数量",
+            "default": 0
+          },
+          "detector_breakdown": {
+            "items": {
+              "$ref": "#/components/schemas/AnomalyDetectorBreakdownItem"
+            },
+            "type": "array",
+            "title": "Detector Breakdown",
+            "description": "检测器分布"
+          },
+          "candidate_cause_titles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Candidate Cause Titles",
+            "description": "主要候选原因标题"
+          }
+        },
+        "type": "object",
+        "title": "AIOpsGuideDiagnosisSnapshot"
+      },
+      "AIOpsGuideAction": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "动作文案"
+          },
+          "action_type": {
+            "type": "string",
+            "title": "Action Type",
+            "description": "动作类型"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target",
+            "description": "动作目标"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "action_type"
+        ],
+        "title": "AIOpsGuideAction"
+      },
+      "AIOpsGuideStep": {
+        "properties": {
+          "step_id": {
+            "type": "string",
+            "title": "Step Id",
+            "description": "步骤 ID"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title",
+            "description": "步骤标题"
+          },
+          "instruction": {
+            "type": "string",
+            "title": "Instruction",
+            "description": "具体执行说明"
+          },
+          "priority": {
+            "type": "string",
+            "title": "Priority",
+            "description": "优先级：high / medium / low"
+          },
+          "expected_result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Result",
+            "description": "预期结果"
+          },
+          "if_not_met": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "If Not Met",
+            "description": "未满足预期时的下一步"
+          }
+        },
+        "type": "object",
+        "required": [
+          "step_id",
+          "title",
+          "instruction",
+          "priority"
+        ],
+        "title": "AIOpsGuideStep"
+      },
+      "AIOpsGuideMeta": {
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At",
+            "description": "生成时间"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "本次使用的主模型"
+          },
+          "used_tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Used Tools",
+            "description": "内部已使用工具"
+          },
+          "context_source": {
+            "type": "string",
+            "title": "Context Source",
+            "description": "上下文补全来源",
+            "default": "server_enriched"
+          },
+          "knowledge_hits": {
+            "type": "integer",
+            "title": "Knowledge Hits",
+            "description": "知识命中数",
+            "default": 0
+          },
+          "history_feedback_hits": {
+            "type": "integer",
+            "title": "History Feedback Hits",
+            "description": "历史反馈命中数",
+            "default": 0
+          },
+          "stage_timings_ms": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Stage Timings Ms",
+            "description": "分阶段耗时"
+          }
+        },
+        "type": "object",
+        "required": [
+          "generated_at",
+          "model"
+        ],
+        "title": "AIOpsGuideMeta"
+      },
+      "AIOpsGuideApplicability": {
+        "properties": {
+          "applies_to": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Applies To",
+            "description": "适用场景"
+          },
+          "not_applies_to": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Not Applies To",
+            "description": "不适用场景"
+          }
+        },
+        "type": "object",
+        "title": "AIOpsGuideApplicability"
+      }
+    }
+  }
+}
