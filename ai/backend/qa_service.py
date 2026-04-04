@@ -13,7 +13,7 @@ from app.schemas import AIReferenceItem
 from app.schemas import AISuggestedAction
 from app.schemas import AIUsedToolItem
 from app.schemas import AIQueryAssistantRequest
-from app.service_common import get_taipei_now
+from app.services.service_common import get_taipei_now
 
 from .anomaly_service import analyze_anomaly_with_ai
 from .config import get_ai_settings

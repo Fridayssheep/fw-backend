@@ -12,7 +12,7 @@ from app.schemas.schemas_meters import MaintenanceRecord
 from app.schemas.schemas_meters import MaintenanceRecordListResponse
 from app.schemas.schemas_meters import Meter
 from app.schemas.schemas_meters import MeterAlarm, MeterAlarmLevel, MeterAlarmStatus
-from app.schemas.schemas_meters import MeterAlarm, MeterAlarmLevel, MeterAlarmStatusListResponse
+from app.schemas.schemas_meters import MeterAlarmListResponse
 from app.schemas.schemas_meters import MeterDetailResponse
 from app.schemas.schemas_meters import MeterListResponse
 from app.schemas.schemas_meters import MeterStatus

@@ -9,7 +9,6 @@ from ai.mcp.config import (
     ALLOWED_RANKING_METRICS,
     ALLOWED_RANKING_ORDERS,
     ALLOWED_ANOMALY_GRANULARITIES,
-    ALLOWED_BASELINE_MODES
 )
 from ai.mcp.utils import (
     _validate_building_ids,
@@ -299,24 +298,18 @@ def energy_anomaly_analysis(
     start_time: str,
     end_time: str,
     granularity: str = "hour",
-    baseline_mode: str = "overall_mean",
     include_weather_context: bool = True,
 ) -> dict[str, Any]:
     """异常检测和根因诊断分析。
 
-    对指定建筑和表计在给定时间窗口内执行异常检测分析，
-    返回检测到的异常点、统计摘要、候选根因和天气相关性等诊断信息。
-    支持多种基线计算模式（如全局平均、同类日期参考等），
-    可选择是否引入天气相关性分析以增强诊断准确性。
+    对指定建筑和表计在给定时间窗口内执行离线异常事件分析，
+    返回检测到的异常事件、检测器分布、统计摘要和天气上下文等信息。
     """
     normalized_building_id = _validate_building_ids([building_id], min_count=1)[0]
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
     normalized_granularity = (
         _validate_choice("granularity", granularity, ALLOWED_ANOMALY_GRANULARITIES) or "hour"
-    )
-    normalized_baseline_mode = (
-        _validate_choice("baseline_mode", baseline_mode, ALLOWED_BASELINE_MODES) or "overall_mean"
     )
     response = _request_backend(
         "POST",
@@ -326,7 +319,7 @@ def energy_anomaly_analysis(
             "meter": normalized_meter,
             "time_range": {"start": normalized_start, "end": normalized_end},
             "granularity": normalized_granularity,
-            "baseline_mode": normalized_baseline_mode,
+            "analysis_mode": "offline_event_review",
             "include_weather_context": include_weather_context,
         },
     )
@@ -334,7 +327,6 @@ def energy_anomaly_analysis(
         response,
         building_id=normalized_building_id,
         meter=normalized_meter,
-        baseline_mode=normalized_baseline_mode,
     )
 
 

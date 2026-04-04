@@ -11,7 +11,6 @@ from app.schemas.schemas_common import Pagination  # 导入分页模型，方便
 from app.schemas.schemas_energy import CopAnalysisResponse  # 导入 COP 响应模型。
 from app.schemas.schemas_energy import CopPoint  # 导入 COP 点模型。
 from app.schemas.schemas_energy import CopSummary  # 导入 COP 摘要模型。
-from app.schemas.schemas_energy import DetectedAnomalyPoint  # 导入异常点模型。
 from app.schemas.schemas_energy import EnergyAnomalyAnalysisRequest  # 导入异常分析请求模型。
 from app.schemas.schemas_energy import EnergyAnomalyAnalysisResponse  # 导入异常分析响应模型。
 from app.schemas.schemas_energy import EnergyCompareItem  # 导入能耗对比项模型。
@@ -595,5 +594,4 @@ def get_weather_context(  # 定义查询天气上下文的函数。
         )  # 完成天气点对象创建。
         for row in rows  # 遍历所有天气结果行。
     ]  # 完成天气点列表构造。
-
 

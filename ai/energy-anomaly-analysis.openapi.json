@@ -1,0 +1,467 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Building Energy AI & Backend API",
+    "version": "0.3.0-local-impl",
+    "description": "Minimal runnable implementation for system, energy, buildings, meters, and AI routes."
+  },
+  "paths": {
+    "/energy/anomaly-analysis": {
+      "post": {
+        "summary": "建筑能耗异常分析",
+        "operationId": "energy_energy_anomaly_analysis_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnergyAnomalyAnalysisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnergyAnomalyAnalysisResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "EnergyAnomalyAnalysisRequest": {
+        "properties": {
+          "building_id": {
+            "type": "string",
+            "title": "Building Id"
+          },
+          "meter": {
+            "type": "string",
+            "title": "Meter"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/TimeRange"
+          },
+          "granularity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Granularity",
+            "default": "hour"
+          },
+          "analysis_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Mode",
+            "default": "offline_event_review"
+          },
+          "include_weather_context": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Include Weather Context",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "building_id",
+          "meter",
+          "time_range"
+        ],
+        "title": "EnergyAnomalyAnalysisRequest"
+      },
+      "TimeRange": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Start"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time",
+            "title": "End"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "TimeRange"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "EnergyAnomalyAnalysisResponse": {
+        "properties": {
+          "building_id": {
+            "type": "string",
+            "title": "Building Id"
+          },
+          "meter": {
+            "type": "string",
+            "title": "Meter"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/TimeRange"
+          },
+          "is_anomalous": {
+            "type": "boolean",
+            "title": "Is Anomalous"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "analysis_mode": {
+            "type": "string",
+            "title": "Analysis Mode",
+            "default": "offline_event_review"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count",
+            "default": 0
+          },
+          "detector_breakdown": {
+            "items": {
+              "$ref": "#/components/schemas/AnomalyDetectorBreakdownItem"
+            },
+            "type": "array",
+            "title": "Detector Breakdown"
+          },
+          "detected_events": {
+            "items": {
+              "$ref": "#/components/schemas/DetectedAnomalyEvent"
+            },
+            "type": "array",
+            "title": "Detected Events"
+          },
+          "series": {
+            "$ref": "#/components/schemas/EnergySeries"
+          },
+          "weather_context": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/WeatherPoint"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weather Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "building_id",
+          "meter",
+          "time_range",
+          "is_anomalous",
+          "summary",
+          "series"
+        ],
+        "title": "EnergyAnomalyAnalysisResponse"
+      },
+      "EnergySeries": {
+        "properties": {
+          "building_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Building Id"
+          },
+          "meter": {
+            "type": "string",
+            "title": "Meter"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/EnergyPoint"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "meter",
+          "points"
+        ],
+        "title": "EnergySeries"
+      },
+      "EnergyPoint": {
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Timestamp"
+          },
+          "building_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Building Id"
+          },
+          "meter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meter"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timestamp",
+          "value"
+        ],
+        "title": "EnergyPoint"
+      },
+      "WeatherPoint": {
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Timestamp"
+          },
+          "air_temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Air Temperature"
+          },
+          "dew_temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dew Temperature"
+          },
+          "wind_speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wind Speed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timestamp"
+        ],
+        "title": "WeatherPoint"
+      },
+      "AnomalyDetectorBreakdownItem": {
+        "properties": {
+          "detected_by": {
+            "type": "string",
+            "title": "Detected By"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detected_by",
+          "event_type",
+          "count"
+        ],
+        "title": "AnomalyDetectorBreakdownItem"
+      },
+      "DetectedAnomalyEvent": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Start Time"
+          },
+          "end_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "End Time"
+          },
+          "severity": {
+            "type": "string",
+            "title": "Severity"
+          },
+          "detected_by": {
+            "type": "string",
+            "title": "Detected By"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "peak_deviation": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Deviation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_id",
+          "start_time",
+          "end_time",
+          "severity",
+          "detected_by",
+          "event_type",
+          "description"
+        ],
+        "title": "DetectedAnomalyEvent"
+      }
+    }
+  }
+}

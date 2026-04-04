@@ -24,7 +24,7 @@ payload = AnomalyFeedbackRequest(
     operator_name='Codex Test',
     resolution_status='confirmed',
     model_name='qwen3.5:35b',
-    baseline_mode='overall_mean',
+    analysis_mode='offline_event_review',
 )
 response = submit_anomaly_feedback(payload)
 print(response.feedback_id)

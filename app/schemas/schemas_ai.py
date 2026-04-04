@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from .schemas_common import TimeRange
+from .schemas_energy import AnomalyDetectorBreakdownItem
 
 
 class AIActionItem(BaseModel):
@@ -43,11 +44,14 @@ class AIAnalyzeAnomalyMeta(BaseModel):
     building_id: str
     meter: str
     time_range: TimeRange
-    baseline_mode: str
+    analysis_mode: str = "offline_event_review"
     generated_at: datetime
     model: str
+    event_count: int = 0
+    detector_breakdown: list[AnomalyDetectorBreakdownItem] = Field(default_factory=list)
     knowledge_hits: int = 0
     history_feedback_hits: int = 0
+    offline_context_used: bool = True
     used_fallback: bool = False
 
 
@@ -56,7 +60,7 @@ class AIAnalyzeAnomalyRequest(BaseModel):
     meter: str
     time_range: TimeRange
     granularity: str | None = "hour"
-    baseline_mode: str | None = "overall_mean"
+    analysis_mode: str | None = "offline_event_review"
     include_weather_context: bool = False
     question: str | None = None
     include_history_feedback: bool = True
@@ -142,7 +146,7 @@ class AnomalyFeedbackRequest(BaseModel):
     operator_name: str | None = None
     resolution_status: str
     model_name: str | None = None
-    baseline_mode: str | None = None
+    analysis_mode: str | None = None
 
 
 class AnomalyFeedbackResponse(BaseModel):
@@ -157,6 +161,40 @@ class AnomalyFeedbackResponse(BaseModel):
 class AIQARequest(BaseModel):
     question: str = Field(..., description="用户提出的问题")
     session_id: str | None = Field(None, description="会话 ID，用于保持多轮对话上下文")
+    context: "AIQAContext | None" = Field(None, description="页面上下文，用于异常分析等需要业务上下文的场景")
+
+
+class AIQAContext(BaseModel):
+    building_id: str | None = Field(None, description="当前页面建筑 ID")
+    meter: str | None = Field(None, description="当前页面表计类型")
+    time_range: TimeRange | None = Field(None, description="当前页面时间范围")
+
+
+class AIReferenceItem(BaseModel):
+    source_type: str = Field(..., description="引用来源类型：knowledge/data/history_case")
+    document_id: str | None = Field(None, description="文档 ID")
+    document_name: str | None = Field(None, description="文档名或来源名")
+    chunk_id: str | None = Field(None, description="知识片段或证据 ID")
+    snippet: str = Field(default="", description="引用摘要")
+    score: float | None = Field(None, description="相关性或权重分数")
+
+
+class AIQAReferences(BaseModel):
+    knowledge: list["AIReferenceItem"] = Field(default_factory=list, description="知识库引用")
+    data: list["AIReferenceItem"] = Field(default_factory=list, description="数据类引用")
+    history_cases: list["AIReferenceItem"] = Field(default_factory=list, description="历史案例引用")
+
+
+class AIUsedToolItem(BaseModel):
+    tool_name: str = Field(..., description="内部调用工具名")
+    tool_type: str = Field(..., description="工具类型")
+    reason: str = Field(..., description="调用原因")
+
+
+class AISuggestedAction(BaseModel):
+    label: str = Field(..., description="前端展示动作文案")
+    action_type: str = Field(..., description="动作类型，如 open_page/call_api/view_reference")
+    target: str | None = Field(None, description="动作目标")
 
 
 class AIQAReferenceChunk(BaseModel):
@@ -181,13 +219,18 @@ class AIQAReference(BaseModel):
 
 
 class AIQAMeta(BaseModel):
-    provider: str = Field(..., description="上游知识问答服务提供方")
-    chat_id: str | None = Field(None, description="RAGFlow Chat ID")
-    used_openai_compatible: bool = Field(default=True, description="是否使用 OpenAI-compatible 接口")
+    provider: str = Field(..., description="本次回答提供方")
+    model: str = Field(..., description="本次回答使用的主模型")
+    generated_at: datetime = Field(..., description="生成时间")
+    used_tools_count: int = Field(default=0, description="本次调用的工具数量")
+    has_references: bool = Field(default=False, description="是否返回了可展示引用")
+    stage_timings_ms: dict[str, int] = Field(default_factory=dict, description="分阶段耗时")
 
 
 class AIQAResponse(BaseModel):
     answer: str = Field(..., description="AI 的回答")
-    session_id: str | None = Field(None, description="当前会话 ID")
-    references: AIQAReference = Field(default_factory=AIQAReference, description="知识库引用信息")
+    question_type: str = Field(..., description="识别后的问题类型")
+    references: AIQAReferences = Field(default_factory=AIQAReferences, description="统一证据引用")
+    used_tools: list[AIUsedToolItem] = Field(default_factory=list, description="内部已使用工具")
+    suggested_actions: list[AISuggestedAction] = Field(default_factory=list, description="建议前端动作")
     meta: AIQAMeta = Field(..., description="调用元信息")

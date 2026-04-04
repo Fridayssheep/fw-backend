@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 from app.core.database import fetch_all
 from app.schemas.schemas_common import Pagination
 from app.schemas.schemas_energy import (
-    DetectedAnomalyPoint,
+    AnomalyDetectorBreakdownItem,
+    DetectedAnomalyEvent,
     EnergyAnomalyAnalysisRequest,
     EnergyAnomalyAnalysisResponse,
     EnergySeries,
@@ -22,6 +23,43 @@ from .service_common import (
     normalize_pagination,
     require_api_datetime,
 )
+
+
+DETECTOR_EVENT_TYPES = {
+    "missing_data_detector": "missing_data",
+    "z_score_detector": "point_outlier",
+    "isolation_forest": "contextual_outlier",
+}
+
+
+def _map_event_type(detected_by: str | None) -> str:
+    return DETECTOR_EVENT_TYPES.get((detected_by or "").strip(), "offline_event")
+
+
+def _build_detector_breakdown(events: list[DetectedAnomalyEvent]) -> list[AnomalyDetectorBreakdownItem]:
+    counts: dict[tuple[str, str], int] = {}
+    for item in events:
+        key = (item.detected_by, item.event_type)
+        counts[key] = counts.get(key, 0) + 1
+    return [
+        AnomalyDetectorBreakdownItem(
+            detected_by=detected_by,
+            event_type=event_type,
+            count=count,
+        )
+        for (detected_by, event_type), count in sorted(counts.items(), key=lambda item: (-item[1], item[0][0], item[0][1]))
+    ]
+
+
+def _build_offline_summary(detector_breakdown: list[AnomalyDetectorBreakdownItem]) -> str:
+    event_count = sum(item.count for item in detector_breakdown)
+    if event_count == 0:
+        return "当前时间范围内未检测到明显的离线异常事件。"
+    detector_text = "，".join(
+        f"{item.detected_by} {item.count} 个"
+        for item in detector_breakdown
+    )
+    return f"检测到 {event_count} 个离线异常事件，其中 {detector_text}。"
 
 def get_energy_anomaly_analysis(
     payload: EnergyAnomalyAnalysisRequest,
@@ -49,7 +87,7 @@ def get_energy_anomaly_analysis(
     # 查 offline_anomaly_detector 的检测结果
     anomaly_rows = fetch_all(
         """
-        SELECT start_time, end_time, peak_deviation, severity, detected_by, description
+        SELECT id, start_time, end_time, peak_deviation, severity, detected_by, description
         FROM anomaly_events
         WHERE building_id = :building_id
           AND meter = :meter
@@ -65,25 +103,25 @@ def get_energy_anomaly_analysis(
         },
     )
 
-    detected_points: list[DetectedAnomalyPoint] = []
+    detected_events: list[DetectedAnomalyEvent] = []
     severity_map = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
     
     for ar in anomaly_rows:
-        detected_points.append(
-            DetectedAnomalyPoint(
-                timestamp=ar["start_time"],
-                actual_value=float(ar["peak_deviation"] or 0),
-                baseline_value=0.0,
-                deviation_rate=float(ar["peak_deviation"] or 0),
-                severity=severity_map.get((ar["severity"] or "").upper(), "low"),
-            )
+        event = DetectedAnomalyEvent(
+            event_id=f"evt_{ar['id']}",
+            start_time=ar["start_time"],
+            end_time=ar["end_time"],
+            severity=severity_map.get((ar["severity"] or "").upper(), "low"),
+            detected_by=ar["detected_by"] or "offline_detector",
+            event_type=_map_event_type(ar["detected_by"]),
+            description=ar["description"] or "检测到离线异常事件",
+            peak_deviation=float(ar["peak_deviation"]) if ar["peak_deviation"] is not None else None,
         )
+        detected_events.append(event)
         
-    is_anomalous = len(detected_points) > 0
-    if is_anomalous:
-        summary = f"检测到 {len(detected_points)} 个离线批处理异常事件模块报警。"
-    else:
-        summary = "当前时间范围内未检测到明显异常。"
+    detector_breakdown = _build_detector_breakdown(detected_events)
+    is_anomalous = len(detected_events) > 0
+    summary = _build_offline_summary(detector_breakdown)
 
     weather_context = None
     if payload.include_weather_context:
@@ -95,8 +133,10 @@ def get_energy_anomaly_analysis(
         time_range=build_api_time_range(resolved_start, resolved_end),
         is_anomalous=is_anomalous,
         summary=summary,
-        baseline_mode="offline_batch",
-        detected_points=detected_points,
+        analysis_mode=payload.analysis_mode or "offline_event_review",
+        event_count=len(detected_events),
+        detector_breakdown=detector_breakdown,
+        detected_events=detected_events,
         series=EnergySeries(
             building_id=payload.building_id,
             meter=normalized_meter,
@@ -168,4 +208,3 @@ def get_meter_alarms(meter_id: str, page: int, page_size: int) -> MeterAlarmList
         items=paged_items,
         pagination=Pagination(page=safe_page, page_size=safe_page_size, total=len(items)),
     )
-

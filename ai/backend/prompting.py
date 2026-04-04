@@ -11,20 +11,24 @@ from app.schemas import WeatherCorrelationResponse
 SYSTEM_PROMPT = """\
 你是“建筑能源智能运维异常分析助手”。
 
-你的任务是基于结构化异常结果、天气信息、知识库片段和历史反馈，
+你的任务是基于离线异常事件结果、天气信息、知识库片段和历史反馈，
 输出可解释、可追溯、可供人工确认的诊断建议。
 
 必须遵守以下规则：
 1. 不要把当前结果表述成“已确认故障”，只能表述为“候选原因”或“诊断建议”。
-2. 当前异常证据优先级高于历史反馈；历史反馈只能辅助排序，不能覆盖当前证据。
+2. 当前离线异常事件证据优先级高于历史反馈；历史反馈只能辅助排序，不能覆盖当前证据。
 3. 必须返回 2 到 5 个 candidate_causes，按 confidence 从高到低排序。
 4. 每个 candidate_cause 必须包含：
    cause_id, title, description, confidence, rank, recommended_checks, evidence_ids。
 5. 所有结论都必须由 evidence 支撑；没有证据支撑的内容不要编造。
 6. 如果证据不足，要明确降低 confidence，并在 answer 或 risk_notice 中说明不确定性。
-7. 输出必须是合法 JSON，不要输出 Markdown、不要输出解释文字、不要输出代码块。
-8. answer、summary、title、description、recommended_checks、risk_notice 使用简洁专业的中文。
-9. 优先做“运维可执行结论”，避免长篇复述输入。
+7. detector 名称只代表“异常被什么算法发现”，不等于根因本身。
+8. 如果 evidence 中出现 missing_data_detector，优先考虑采集链路、网关、通信或断流问题。
+9. 如果 evidence 中出现 isolation_forest，优先解释为“不符合历史周期规律”的异常，不能直接断言设备故障。
+10. 如果 evidence 中出现 z_score_detector，优先解释为突发极值或突发波动事件。
+11. 输出必须是合法 JSON，不要输出 Markdown、不要输出解释文字、不要输出代码块。
+12. answer、summary、title、description、recommended_checks、risk_notice 使用简洁专业的中文。
+13. 优先做“运维可执行结论”，避免长篇复述输入。
 
 状态字段约束：
 - 如果检测到明显异常，status 使用 needs_confirmation
@@ -72,9 +76,13 @@ def _json_block(value: Any) -> str:
 
 def _build_compact_anomaly_context(anomaly_result: EnergyAnomalyAnalysisResponse) -> dict[str, Any]:
     """压缩异常分析结果，减少提示词 token 占用。"""
-    detected_points = sorted(
-        anomaly_result.detected_points,
-        key=lambda item: item.deviation_rate,
+    severity_priority = {"high": 3, "medium": 2, "low": 1}
+    representative_events = sorted(
+        anomaly_result.detected_events,
+        key=lambda item: (
+            severity_priority.get(item.severity, 0),
+            item.peak_deviation or 0,
+        ),
         reverse=True,
     )[:5]
     series_points = anomaly_result.series.points
@@ -98,16 +106,28 @@ def _build_compact_anomaly_context(anomaly_result: EnergyAnomalyAnalysisResponse
         'time_range': anomaly_result.time_range,
         'is_anomalous': anomaly_result.is_anomalous,
         'summary': anomaly_result.summary,
-        'baseline_mode': anomaly_result.baseline_mode,
-        'detected_points': [
+        'analysis_mode': anomaly_result.analysis_mode,
+        'event_count': anomaly_result.event_count,
+        'detector_breakdown': [
             {
-                'timestamp': item.timestamp,
-                'actual_value': item.actual_value,
-                'baseline_value': item.baseline_value,
-                'deviation_rate': item.deviation_rate,
-                'severity': item.severity,
+                'detected_by': item.detected_by,
+                'event_type': item.event_type,
+                'count': item.count,
             }
-            for item in detected_points
+            for item in anomaly_result.detector_breakdown
+        ],
+        'representative_events': [
+            {
+                'event_id': item.event_id,
+                'start_time': item.start_time,
+                'end_time': item.end_time,
+                'severity': item.severity,
+                'detected_by': item.detected_by,
+                'event_type': item.event_type,
+                'description': item.description,
+                'peak_deviation': item.peak_deviation,
+            }
+            for item in representative_events
         ],
         'series_excerpt': compact_series,
     }
@@ -173,8 +193,8 @@ def build_analyze_anomaly_prompts(
         'answer': '完整分析说明',
         'candidate_causes': [
             {
-                'cause_id': 'load_shift',
-                'title': '负荷模式变化',
+                'cause_id': 'pattern_shift',
+                'title': '运行周期规律偏移',
                 'description': '对候选原因的中文解释',
                 'confidence': 0.72,
                 'rank': 1,
@@ -182,8 +202,8 @@ def build_analyze_anomaly_prompts(
                 'evidence_ids': ['evi_001', 'evi_002'],
             },
             {
-                'cause_id': 'efficiency_drop',
-                'title': '设备效率下降',
+                'cause_id': 'data_pipeline_issue',
+                'title': '采集链路或通信异常',
                 'description': '对候选原因的中文解释',
                 'confidence': 0.51,
                 'rank': 2,
@@ -196,8 +216,8 @@ def build_analyze_anomaly_prompts(
             {
                 'evidence_id': 'evi_001',
                 'type': 'data',
-                'source': 'energy_anomaly_analysis',
-                'snippet': '证据摘要',
+                'source': 'z_score_detector',
+                'snippet': '发生突发性数值读数异常，Z-Score 偏离度高达 4.82',
                 'weight': 0.91,
             }
         ],
@@ -222,7 +242,7 @@ def build_analyze_anomaly_prompts(
         'meter': request.meter,
         'time_range': request.time_range,
         'granularity': request.granularity,
-        'baseline_mode': request.baseline_mode,
+        'analysis_mode': request.analysis_mode,
         'question': request.question,
     }
     compact_anomaly = _build_compact_anomaly_context(anomaly_result)
@@ -232,12 +252,12 @@ def build_analyze_anomaly_prompts(
     allowed_targets_text = '\n'.join(f'- {item}' for item in allowed_action_targets)
 
     user_prompt = f"""\
-请根据以下输入，对本次建筑能耗异常做运维诊断分析。
+请根据以下输入，对本次建筑能耗离线异常事件做运维诊断分析。
 
 【请求参数】
 {_json_block(compact_request)}
 
-【异常检测摘要】
+【离线异常事件摘要】
 {_json_block(compact_anomaly)}
 
 【天气摘要】
@@ -262,9 +282,10 @@ def build_analyze_anomaly_prompts(
    evidence_id, type, source, snippet, weight
 6. risk_notice 必须明确说明“这是诊断建议，不是已确认故障”。
 7. 如果历史反馈命中了相似案例，可以在 evidence 中加入 type=history_case 的证据。
-8. 不要输出任何 JSON 之外的文本。
-9. actions.target 只能从上面的允许列表中选择，不要发明新的 target。
-10. 如果没有合适的下一步动作，actions 可以返回空数组。
+8. 如果 source 是 z_score_detector / isolation_forest / missing_data_detector，请把它理解为“异常发现来源”，不要把 detector 名称直接当成根因。
+9. 不要输出任何 JSON 之外的文本。
+10. actions.target 只能从上面的允许列表中选择，不要发明新的 target。
+11. 如果没有合适的下一步动作，actions 可以返回空数组。
 
 【输出 JSON 骨架示例】
 {_json_block(output_schema_hint)}

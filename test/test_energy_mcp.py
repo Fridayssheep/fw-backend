@@ -213,7 +213,6 @@ def main() -> None:
             start_time=TIME_START,
             end_time=TIME_END,
             granularity='hour',
-            baseline_mode='overall_mean',
             include_weather_context=True,
         ),
     ]

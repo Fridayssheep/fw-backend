@@ -12,9 +12,9 @@ from app.schemas import AIEvidenceItem
 from app.schemas import AIFeedbackPrompt
 from app.schemas import EnergyAnomalyAnalysisRequest
 from app.schemas import WeatherCorrelationResponse
-from app.service_common import get_taipei_now
-from app.services_energy import get_energy_anomaly_analysis
-from app.services_energy import get_energy_weather_correlation
+from app.services.service_common import get_taipei_now
+from app.services.services_anomaly import get_energy_anomaly_analysis
+from app.services.services_energy import get_energy_weather_correlation
 
 from .config import get_ai_settings
 from .history import retrieve_similar_feedback_cases
@@ -33,6 +33,26 @@ from .prompting import build_analyze_anomaly_prompts
 # ============================================================================
 
 
+def _detector_counts(anomaly_result: Any) -> dict[str, int]:
+    return {
+        item.detected_by: item.count
+        for item in getattr(anomaly_result, "detector_breakdown", [])
+    }
+
+
+def _top_detected_events(anomaly_result: Any, limit: int = 3) -> list[Any]:
+    severity_priority = {"high": 3, "medium": 2, "low": 1}
+    events = list(getattr(anomaly_result, "detected_events", []) or [])
+    return sorted(
+        events,
+        key=lambda item: (
+            severity_priority.get(item.severity, 0),
+            item.peak_deviation or 0,
+        ),
+        reverse=True,
+    )[:limit]
+
+
 def _build_analysis_id() -> str:
     """生成一次异常分析的唯一 ID。"""
     return f"ana_{uuid4().hex[:16]}"
@@ -40,10 +60,12 @@ def _build_analysis_id() -> str:
 
 def _collect_highlights(anomaly_summary: str, weather_result: WeatherCorrelationResponse | None) -> list[str]:
     highlights = [anomaly_summary]
+    if weather_result is None:
+        return highlights[:3]
     if weather_result and weather_result.factors:
         strongest = max(weather_result.factors, key=lambda item: abs(item.coefficient))
         highlights.append(
-            f"Strongest weather factor: {strongest.name} ({strongest.coefficient:.4f}, {strongest.direction})"
+            f"最强天气因子：{strongest.name}（相关系数 {strongest.coefficient:.4f}，{strongest.direction}）"
         )
     return highlights[:3]
 
@@ -53,32 +75,85 @@ def _build_default_candidate_causes(
     weather_result: WeatherCorrelationResponse | None,
     max_candidate_causes: int,
 ) -> list[AICandidateCause]:
-    candidates = [
-        AICandidateCause(
-            cause_id="load_shift",
-            title="负荷模式变化",
-            description="当前能耗与基线出现明显偏离，可能由节假日、排班调整或使用强度变化引起。",
-            confidence=0.62,
-            rank=1,
-            recommended_checks=[
-                "核对异常时间段内的人员活动和排班是否有变化。",
-                "对比前一周或去年同期的同类时段负荷水平。",
-            ],
-            evidence_ids=["evi_data_anomaly"],
-        ),
-        AICandidateCause(
-            cause_id="efficiency_drop",
-            title="设备效率下降或控制漂移",
-            description="持续偏高或偏低的负荷，可能和设备效率下降、控制参数漂移或运行策略异常有关。",
-            confidence=0.51,
-            rank=2,
-            recommended_checks=[
-                "检查主要设备的效率指标、控制设定值和启停逻辑。",
-                "回看最近是否有运维调参、维修或策略切换。",
-            ],
-            evidence_ids=["evi_data_anomaly"],
-        ),
-    ]
+    candidates: list[AICandidateCause] = []
+    detector_counts = _detector_counts(anomaly_result)
+
+    if detector_counts.get("missing_data_detector"):
+        candidates.append(
+            AICandidateCause(
+                cause_id="data_pipeline_issue",
+                title="采集链路或通信异常",
+                description="离线事件中出现断流或长时间缺测，优先怀疑表计采集、网关通信、上报链路或数据落库异常。",
+                confidence=0.78,
+                rank=1,
+                recommended_checks=[
+                    "核对表计最近心跳、网关在线状态和采集任务日志。",
+                    "确认异常时段内是否存在断网、停电或数据库写入失败。",
+                ],
+                evidence_ids=["evi_data_anomaly", "evi_detector_missing_data"],
+            )
+        )
+
+    if detector_counts.get("z_score_detector"):
+        candidates.append(
+            AICandidateCause(
+                cause_id="sudden_load_spike",
+                title="突发极值波动",
+                description="检测器识别到读数相对历史均值存在显著偏离，更像是突发尖峰、突降或一次性异常事件。",
+                confidence=0.72,
+                rank=len(candidates) + 1,
+                recommended_checks=[
+                    "核对异常时刻是否有突发启停、临时加载或异常操作。",
+                    "查看同时间段设备运行日志，确认是否存在一次性冲击负荷。",
+                ],
+                evidence_ids=["evi_data_anomaly", "evi_detector_z_score"],
+            )
+        )
+
+    if detector_counts.get("isolation_forest"):
+        candidates.append(
+            AICandidateCause(
+                cause_id="pattern_shift",
+                title="运行周期规律偏移",
+                description="离线模型认为该读数不符合该时间段的历史周期规律，更可能是排班变化、策略切换或隐性异常，而非单次极值。",
+                confidence=0.68,
+                rank=len(candidates) + 1,
+                recommended_checks=[
+                    "对照该时段历史工作日/周末模式，确认运行策略是否发生变化。",
+                    "核查定时控制、节假日策略或设备自动控制逻辑是否被修改。",
+                ],
+                evidence_ids=["evi_data_anomaly", "evi_detector_isolation_forest"],
+            )
+        )
+
+    candidates.extend(
+        [
+            AICandidateCause(
+                cause_id="load_shift",
+                title="负荷模式变化",
+                description="当前离线异常事件可能与节假日、排班调整、使用强度变化或策略切换有关。",
+                confidence=0.56,
+                rank=len(candidates) + 1,
+                recommended_checks=[
+                    "核对异常时间段内的人员活动和排班是否有变化。",
+                    "对比前一周或去年同期的同类时段负荷水平。",
+                ],
+                evidence_ids=["evi_data_anomaly"],
+            ),
+            AICandidateCause(
+                cause_id="efficiency_drop",
+                title="设备效率下降或控制漂移",
+                description="如果异常事件持续反复出现，也可能与设备效率下降、控制参数漂移或运行策略异常有关。",
+                confidence=0.47,
+                rank=len(candidates) + 2,
+                recommended_checks=[
+                    "检查主要设备的效率指标、控制设定值和启停逻辑。",
+                    "回看最近是否有运维调参、维修或策略切换。",
+                ],
+                evidence_ids=["evi_data_anomaly"],
+            ),
+        ]
+    )
     if weather_result and weather_result.factors:
         candidates.append(
             AICandidateCause(
@@ -94,7 +169,7 @@ def _build_default_candidate_causes(
                 evidence_ids=["evi_weather_corr"],
             )
         )
-    if not anomaly_result.detected_points:
+    if anomaly_result.event_count == 0:
         candidates.append(
             AICandidateCause(
                 cause_id="insufficient_signal",
@@ -109,7 +184,20 @@ def _build_default_candidate_causes(
                 evidence_ids=["evi_data_anomaly"],
             )
         )
-    return candidates[:max(2, min(max_candidate_causes, 5))]
+    max_items = max(2, min(max_candidate_causes, 5))
+    normalized_candidates: list[AICandidateCause] = []
+    seen_ids: set[str] = set()
+    for item in candidates:
+        if item.cause_id in seen_ids:
+            continue
+        seen_ids.add(item.cause_id)
+        normalized_candidates.append(item)
+        if len(normalized_candidates) >= max_items:
+            break
+
+    for index, item in enumerate(normalized_candidates, start=1):
+        item.rank = index
+    return normalized_candidates
 
 
 def _build_default_evidence(
@@ -117,6 +205,7 @@ def _build_default_evidence(
     weather_result: WeatherCorrelationResponse | None,
     history_context: list[dict[str, Any]],
 ) -> list[AIEvidenceItem]:
+    detector_counts = _detector_counts(anomaly_result)
     evidence: list[AIEvidenceItem] = [
         AIEvidenceItem(
             evidence_id="evi_data_anomaly",
@@ -126,13 +215,57 @@ def _build_default_evidence(
             weight=0.9 if anomaly_result.is_anomalous else 0.4,
         )
     ]
+    for index, event in enumerate(_top_detected_events(anomaly_result), start=1):
+        evidence.append(
+            AIEvidenceItem(
+                evidence_id=f"evi_evt_{index:03d}",
+                type="data",
+                source=event.detected_by,
+                snippet=(
+                    f"{event.description} "
+                    f"(时间 {event.start_time.isoformat()} 至 {event.end_time.isoformat()}，"
+                    f"严重级别 {event.severity})"
+                ),
+                weight=0.75 if event.severity == "high" else 0.6,
+            )
+        )
+    if detector_counts.get("missing_data_detector"):
+        evidence.append(
+            AIEvidenceItem(
+                evidence_id="evi_detector_missing_data",
+                type="data",
+                source="missing_data_detector",
+                snippet=f"当前窗口命中 {detector_counts['missing_data_detector']} 个断流/缺失异常事件。",
+                weight=0.82,
+            )
+        )
+    if detector_counts.get("z_score_detector"):
+        evidence.append(
+            AIEvidenceItem(
+                evidence_id="evi_detector_z_score",
+                type="data",
+                source="z_score_detector",
+                snippet=f"当前窗口命中 {detector_counts['z_score_detector']} 个 Z-Score 突发极值事件。",
+                weight=0.8,
+            )
+        )
+    if detector_counts.get("isolation_forest"):
+        evidence.append(
+            AIEvidenceItem(
+                evidence_id="evi_detector_isolation_forest",
+                type="data",
+                source="isolation_forest",
+                snippet=f"当前窗口命中 {detector_counts['isolation_forest']} 个孤立森林隐性周期异常事件。",
+                weight=0.72,
+            )
+        )
     if weather_result:
         evidence.append(
             AIEvidenceItem(
                 evidence_id="evi_weather_corr",
                 type="weather",
                 source="energy_weather_correlation",
-                snippet=f"Main weather correlation coefficient: {weather_result.correlation_coefficient:.4f}",
+                snippet=f"天气相关性系数为 {weather_result.correlation_coefficient:.4f}",
                 weight=0.6,
             )
         )
@@ -265,7 +398,7 @@ def _build_fallback_answer(
 ) -> str:
     """构造给前端可直接展示的中文 fallback 诊断摘要。"""
 
-    segments = [f"根据当前异常检测结果，{anomaly_result.summary}"]
+    segments = [f"根据当前离线异常事件分析结果，{anomaly_result.summary}"]
 
     if candidate_causes:
         top_causes = "；".join(
@@ -279,7 +412,7 @@ def _build_fallback_answer(
             f"天气相关性系数约为 {weather_result.correlation_coefficient:.2f}，请结合现场运行工况综合判断。"
         )
 
-    segments.append("这是一份基于结构化结果生成的辅助诊断建议，仍需结合现场排班、设备日志和运维记录进一步确认。")
+    segments.append("这是一份基于离线异常事件和结构化结果生成的辅助诊断建议，仍需结合现场排班、设备日志和运维记录进一步确认。")
     return " ".join(segments)
 
 
@@ -319,11 +452,14 @@ def _build_fallback_response(
             building_id=request.building_id,
             meter=request.meter,
             time_range=request.time_range,
-            baseline_mode=request.baseline_mode or "overall_mean",
+            analysis_mode=anomaly_result.analysis_mode,
             generated_at=generated_at,
             model=settings_model,
+            event_count=anomaly_result.event_count,
+            detector_breakdown=anomaly_result.detector_breakdown,
             knowledge_hits=0,
             history_feedback_hits=len(history_context),
+            offline_context_used=True,
             used_fallback=True,
         ),
     )
@@ -363,18 +499,21 @@ def _normalize_llm_response(
         actions=actions,
         risk_notice=str(
             llm_response.get("risk_notice")
-            or "This output is a diagnosis suggestion and should not be treated as a confirmed fault."
+            or "当前结果属于诊断建议，不是已确认故障，请结合现场记录进一步核实。"
         ),
         feedback_prompt=_coerce_feedback_prompt(llm_response.get("feedback_prompt")),
         meta=AIAnalyzeAnomalyMeta(
             building_id=request.building_id,
             meter=request.meter,
             time_range=request.time_range,
-            baseline_mode=request.baseline_mode or "overall_mean",
+            analysis_mode=anomaly_result.analysis_mode,
             generated_at=generated_at,
             model=settings_model,
+            event_count=anomaly_result.event_count,
+            detector_breakdown=anomaly_result.detector_breakdown,
             knowledge_hits=len(knowledge_context),
             history_feedback_hits=len(history_context),
+            offline_context_used=True,
             used_fallback=False,
         ),
     )
@@ -395,7 +534,7 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
         meter=payload.meter,
         time_range=payload.time_range,
         granularity=payload.granularity,
-        baseline_mode=payload.baseline_mode,
+        analysis_mode=payload.analysis_mode,
         include_weather_context=payload.include_weather_context,
     )
     anomaly_result = get_energy_anomaly_analysis(energy_payload)
@@ -456,4 +595,3 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
             settings_model=settings.llm_model,
             allowed_action_targets=settings.ai_allowed_action_targets,
         )
-

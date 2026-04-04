@@ -1,0 +1,508 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Building Energy AI & Backend API",
+    "version": "0.3.0-local-impl",
+    "description": "Minimal runnable implementation for system, energy, buildings, meters, and AI routes."
+  },
+  "paths": {
+    "/ai/analyze-anomaly": {
+      "post": {
+        "summary": "AI anomaly analysis",
+        "operationId": "ai_ai_analyze_anomaly_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIAnalyzeAnomalyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIAnalyzeAnomalyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AIAnalyzeAnomalyRequest": {
+        "properties": {
+          "building_id": {
+            "type": "string",
+            "title": "Building Id"
+          },
+          "meter": {
+            "type": "string",
+            "title": "Meter"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/TimeRange"
+          },
+          "granularity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Granularity",
+            "default": "hour"
+          },
+          "analysis_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Mode",
+            "default": "offline_event_review"
+          },
+          "include_weather_context": {
+            "type": "boolean",
+            "title": "Include Weather Context",
+            "default": false
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "include_history_feedback": {
+            "type": "boolean",
+            "title": "Include History Feedback",
+            "default": true
+          },
+          "max_candidate_causes": {
+            "type": "integer",
+            "title": "Max Candidate Causes",
+            "default": 3
+          }
+        },
+        "type": "object",
+        "required": [
+          "building_id",
+          "meter",
+          "time_range"
+        ],
+        "title": "AIAnalyzeAnomalyRequest"
+      },
+      "TimeRange": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Start"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time",
+            "title": "End"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "title": "TimeRange"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "AIAnalyzeAnomalyResponse": {
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "title": "Analysis Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "candidate_causes": {
+            "items": {
+              "$ref": "#/components/schemas/AICandidateCause"
+            },
+            "type": "array",
+            "title": "Candidate Causes"
+          },
+          "highlights": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Highlights"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/AIEvidenceItem"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/AIActionItem"
+            },
+            "type": "array",
+            "title": "Actions"
+          },
+          "risk_notice": {
+            "type": "string",
+            "title": "Risk Notice"
+          },
+          "feedback_prompt": {
+            "$ref": "#/components/schemas/AIFeedbackPrompt"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/AIAnalyzeAnomalyMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "status",
+          "summary",
+          "answer",
+          "candidate_causes",
+          "risk_notice",
+          "feedback_prompt",
+          "meta"
+        ],
+        "title": "AIAnalyzeAnomalyResponse"
+      },
+      "AIFeedbackPrompt": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "allow_score": {
+            "type": "boolean",
+            "title": "Allow Score",
+            "default": true
+          },
+          "allow_comment": {
+            "type": "boolean",
+            "title": "Allow Comment",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "AIFeedbackPrompt"
+      },
+      "AIActionItem": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "action_type": {
+            "type": "string",
+            "title": "Action Type"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "action_type",
+          "target"
+        ],
+        "title": "AIActionItem"
+      },
+      "AIAnalyzeAnomalyMeta": {
+        "properties": {
+          "building_id": {
+            "type": "string",
+            "title": "Building Id"
+          },
+          "meter": {
+            "type": "string",
+            "title": "Meter"
+          },
+          "time_range": {
+            "$ref": "#/components/schemas/TimeRange"
+          },
+          "analysis_mode": {
+            "type": "string",
+            "title": "Analysis Mode",
+            "default": "offline_event_review"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count",
+            "default": 0
+          },
+          "detector_breakdown": {
+            "items": {
+              "$ref": "#/components/schemas/AnomalyDetectorBreakdownItem"
+            },
+            "type": "array",
+            "title": "Detector Breakdown"
+          },
+          "knowledge_hits": {
+            "type": "integer",
+            "title": "Knowledge Hits",
+            "default": 0
+          },
+          "history_feedback_hits": {
+            "type": "integer",
+            "title": "History Feedback Hits",
+            "default": 0
+          },
+          "offline_context_used": {
+            "type": "boolean",
+            "title": "Offline Context Used",
+            "default": true
+          },
+          "used_fallback": {
+            "type": "boolean",
+            "title": "Used Fallback",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "building_id",
+          "meter",
+          "time_range",
+          "generated_at",
+          "model"
+        ],
+        "title": "AIAnalyzeAnomalyMeta"
+      },
+      "AnomalyDetectorBreakdownItem": {
+        "properties": {
+          "detected_by": {
+            "type": "string",
+            "title": "Detected By"
+          },
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detected_by",
+          "event_type",
+          "count"
+        ],
+        "title": "AnomalyDetectorBreakdownItem"
+      },
+      "AIEvidenceItem": {
+        "properties": {
+          "evidence_id": {
+            "type": "string",
+            "title": "Evidence Id"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "snippet": {
+            "type": "string",
+            "title": "Snippet"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight"
+          }
+        },
+        "type": "object",
+        "required": [
+          "evidence_id",
+          "type",
+          "source",
+          "snippet"
+        ],
+        "title": "AIEvidenceItem"
+      },
+      "AICandidateCause": {
+        "properties": {
+          "cause_id": {
+            "type": "string",
+            "title": "Cause Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "rank": {
+            "type": "integer",
+            "title": "Rank"
+          },
+          "recommended_checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recommended Checks"
+          },
+          "evidence_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cause_id",
+          "title",
+          "description",
+          "confidence",
+          "rank"
+        ],
+        "title": "AICandidateCause"
+      }
+    }
+  }
+}

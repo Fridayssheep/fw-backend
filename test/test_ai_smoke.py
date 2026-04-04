@@ -23,6 +23,8 @@ from app.schemas import AIQAMeta
 from app.schemas import AICandidateCause
 from app.schemas import AIEvidenceItem
 from app.schemas import AIQueryAssistantRequest
+from app.schemas import AnomalyDetectorBreakdownItem
+from app.schemas import DetectedAnomalyEvent
 from app.schemas import EnergyAnomalyAnalysisResponse
 from app.schemas import EnergyPoint
 from app.schemas import EnergySeries
@@ -43,9 +45,25 @@ def build_dummy_anomaly_response() -> EnergyAnomalyAnalysisResponse:
         meter="electricity",
         time_range=time_range,
         is_anomalous=True,
-        summary="检测到 2 个异常点，最大偏离率为 41.61%。",
-        baseline_mode="overall_mean",
-        detected_points=[],
+        summary="检测到 2 个离线异常事件，包含 1 个突发极值和 1 个隐性周期异常。",
+        analysis_mode="offline_event_review",
+        event_count=2,
+        detector_breakdown=[
+            AnomalyDetectorBreakdownItem(detected_by="z_score_detector", event_type="point_outlier", count=1),
+            AnomalyDetectorBreakdownItem(detected_by="isolation_forest", event_type="contextual_outlier", count=1),
+        ],
+        detected_events=[
+            DetectedAnomalyEvent(
+                event_id="evt_1",
+                start_time=datetime.fromisoformat("2017-01-01T18:00:00+00:00"),
+                end_time=datetime.fromisoformat("2017-01-01T18:00:00+00:00"),
+                severity="high",
+                detected_by="z_score_detector",
+                event_type="point_outlier",
+                description="出现突发性异常高值。",
+                peak_deviation=41.61,
+            )
+        ],
         series=EnergySeries(
             building_id="Bear_assembly_Angel",
             meter="electricity",
@@ -132,9 +150,13 @@ def build_dummy_ai_anomaly_response() -> AIAnalyzeAnomalyResponse:
                 start=datetime.fromisoformat("2017-01-01T00:00:00+00:00"),
                 end=datetime.fromisoformat("2017-01-02T00:00:00+00:00"),
             ),
-            baseline_mode="overall_mean",
+            analysis_mode="offline_event_review",
             generated_at=datetime.fromisoformat("2026-04-02T12:00:00+08:00"),
             model="qwen3.5-plus",
+            event_count=2,
+            detector_breakdown=[
+                AnomalyDetectorBreakdownItem(detected_by="z_score_detector", event_type="point_outlier", count=1)
+            ],
             knowledge_hits=1,
             history_feedback_hits=1,
             used_fallback=False,

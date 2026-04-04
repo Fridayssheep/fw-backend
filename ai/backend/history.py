@@ -1,6 +1,6 @@
 ﻿from typing import Any
 
-from app.database import fetch_all
+from app.core.database import fetch_all
 
 
 def retrieve_similar_feedback_cases(

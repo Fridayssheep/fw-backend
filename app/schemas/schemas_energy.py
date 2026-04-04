@@ -110,12 +110,21 @@ class WeatherCorrelationResponse(BaseModel):
     factors: list[WeatherFactor] = Field(default_factory=list)
 
 
-class DetectedAnomalyPoint(BaseModel):
-    timestamp: datetime
-    actual_value: float
-    baseline_value: float
-    deviation_rate: float
+class DetectedAnomalyEvent(BaseModel):
+    event_id: str
+    start_time: datetime
+    end_time: datetime
     severity: str
+    detected_by: str
+    event_type: str
+    description: str
+    peak_deviation: float | None = None
+
+
+class AnomalyDetectorBreakdownItem(BaseModel):
+    detected_by: str
+    event_type: str
+    count: int
 
 
 class EnergyAnomalyAnalysisRequest(BaseModel):
@@ -123,7 +132,7 @@ class EnergyAnomalyAnalysisRequest(BaseModel):
     meter: str
     time_range: TimeRange
     granularity: str | None = "hour"
-    baseline_mode: str | None = "overall_mean"
+    analysis_mode: str | None = "offline_event_review"
     include_weather_context: bool | None = False
 
 
@@ -133,7 +142,9 @@ class EnergyAnomalyAnalysisResponse(BaseModel):
     time_range: TimeRange
     is_anomalous: bool
     summary: str
-    baseline_mode: str
-    detected_points: list[DetectedAnomalyPoint]
+    analysis_mode: str = "offline_event_review"
+    event_count: int = 0
+    detector_breakdown: list[AnomalyDetectorBreakdownItem] = Field(default_factory=list)
+    detected_events: list[DetectedAnomalyEvent] = Field(default_factory=list)
     series: EnergySeries
     weather_context: list[WeatherPoint] | None = None

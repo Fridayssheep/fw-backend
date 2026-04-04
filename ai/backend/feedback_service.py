@@ -4,13 +4,13 @@ from uuid import uuid4
 
 from sqlalchemy import text
 
-from app.database import engine
+from app.core.database import engine
 from app.schemas import AnomalyFeedbackMeta
 from app.schemas import AnomalyFeedbackRequest
 from app.schemas import AnomalyFeedbackResponse
 from app.schemas import CandidateFeedbackItem
 from app.schemas import SelectedCauseSummary
-from app.service_common import get_taipei_now
+from app.services.service_common import get_taipei_now
 
 
 VALID_RESOLUTION_STATUS = {
@@ -135,7 +135,7 @@ def submit_anomaly_feedback(payload: AnomalyFeedbackRequest) -> AnomalyFeedbackR
                     'operator_id': payload.operator_id,
                     'operator_name': payload.operator_name,
                     'model_name': payload.model_name,
-                    'baseline_mode': payload.baseline_mode,
+                    'baseline_mode': payload.analysis_mode,
                 },
             )
             for item in candidate_feedbacks:

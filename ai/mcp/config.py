@@ -20,5 +20,4 @@ ALLOWED_QUERY_AGGREGATIONS = {"sum", "avg", "max", "min"}
 ALLOWED_COMPARE_METRICS = {"sum", "avg", "peak"}
 ALLOWED_RANKING_METRICS = {"sum", "avg", "peak"}
 ALLOWED_RANKING_ORDERS = {"asc", "desc"}
-ALLOWED_BASELINE_MODES = {"overall_mean", "same_hour_mean"}
 ALLOWED_ANOMALY_GRANULARITIES = {"hour", "day"}

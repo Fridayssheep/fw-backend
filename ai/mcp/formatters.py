@@ -379,21 +379,33 @@ def _summarize_energy_anomaly_analysis(
     *,
     building_id: str,
     meter: str,
-    baseline_mode: str,
 ) -> dict[str, Any]:
     """格式化 anomaly-analysis 的结果摘要。"""
-    detected_points = response.get("detected_points", [])
+    detected_events = response.get("detected_events", [])
     is_anomalous = response.get("is_anomalous", False)
     highlights = [
         f"建筑: {building_id}",
         f"表计: {meter}",
-        f"基线模式: {baseline_mode}",
-        f"异常点数量: {len(detected_points)}",
+        f"分析模式: {response.get('analysis_mode', 'offline_event_review')}",
+        f"异常事件数量: {response.get('event_count', len(detected_events))}",
     ]
-    if detected_points:
-        max_point = max(detected_points, key=lambda item: item.get("deviation_rate", 0))
-        highlights.append(f"最大偏离率: {_format_number(max_point.get('deviation_rate', 0) * 100, 2)}%")
-        highlights.append(f"最高严重级别: {max_point.get('severity')}")
+    if response.get("detector_breakdown"):
+        detector_text = "，".join(
+            f"{item.get('detected_by')}:{item.get('count')}"
+            for item in response.get("detector_breakdown", [])
+        )
+        highlights.append(f"检测器分布: {detector_text}")
+    if detected_events:
+        highest_event = max(
+            detected_events,
+            key=lambda item: (
+                {"high": 3, "medium": 2, "low": 1}.get(item.get("severity"), 0),
+                item.get("peak_deviation") or 0,
+            ),
+        )
+        if highest_event.get("peak_deviation") is not None:
+            highlights.append(f"最大偏离指标: {_format_number(highest_event.get('peak_deviation', 0), 2)}")
+        highlights.append(f"最高严重级别: {highest_event.get('severity')}")
     if response.get("weather_context"):
         highlights.append(f"天气上下文点数: {len(response.get('weather_context', []))}")
     summary = response.get("summary") or (
@@ -413,7 +425,7 @@ def _summarize_energy_anomaly_analysis(
         request_context={
             "building_id": building_id,
             "meter": meter,
-            "baseline_mode": baseline_mode,
+            "analysis_mode": response.get("analysis_mode", "offline_event_review"),
         },
         data=response,
     )

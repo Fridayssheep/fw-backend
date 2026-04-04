@@ -10,10 +10,10 @@ from app.schemas import AIQueryAssistantRequest
 from app.schemas import AIQueryAssistantResponse
 from app.schemas import AIQueryIntent
 from app.schemas import TimeRange
-from app.service_common import build_api_time_range
-from app.service_common import get_taipei_now
-from app.service_common import normalize_granularity
-from app.service_common import normalize_meter
+from app.services.service_common import build_api_time_range
+from app.services.service_common import get_taipei_now
+from app.services.service_common import normalize_granularity
+from app.services.service_common import normalize_meter
 
 from .config import get_ai_settings
 from .llm_client import OpenAICompatibleClient
@@ -253,7 +253,7 @@ def _intent_to_query_params(intent: AIQueryIntent, endpoint: str) -> dict[str, A
                 'end': intent.time_range.end.isoformat(),
             },
             'granularity': intent.granularity or 'hour',
-            'baseline_mode': 'overall_mean',
+            'analysis_mode': 'offline_event_review',
             'include_weather_context': True,
         }
     if endpoint == '/energy/weather-correlation':

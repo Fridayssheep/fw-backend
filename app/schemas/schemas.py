@@ -9,8 +9,13 @@ from .schemas_ai import AIQAReference
 from .schemas_ai import AIQAReferenceChunk
 from .schemas_ai import AIQAReferenceDocAgg
 from .schemas_ai import AIQAMeta
+from .schemas_ai import AIQAContext
 from .schemas_ai import AIQARequest
+from .schemas_ai import AIQAReferences
 from .schemas_ai import AIQAResponse
+from .schemas_ai import AIReferenceItem
+from .schemas_ai import AISuggestedAction
+from .schemas_ai import AIUsedToolItem
 from .schemas_ai import AIQueryAssistantMeta
 from .schemas_ai import AIQueryAssistantRequest
 from .schemas_ai import AIQueryAssistantResponse
@@ -31,7 +36,8 @@ from .schemas_common import TimeRange
 from .schemas_energy import CopAnalysisResponse
 from .schemas_energy import CopPoint
 from .schemas_energy import CopSummary
-from .schemas_energy import DetectedAnomalyPoint
+from .schemas_energy import AnomalyDetectorBreakdownItem
+from .schemas_energy import DetectedAnomalyEvent
 from .schemas_energy import EnergyAnomalyAnalysisRequest
 from .schemas_energy import EnergyAnomalyAnalysisResponse
 from .schemas_energy import EnergyCompareItem
@@ -72,15 +78,21 @@ __all__ = [
     "AIAnalyzeAnomalyMeta",
     "AIAnalyzeAnomalyRequest",
     "AIAnalyzeAnomalyResponse",
+    "AnomalyDetectorBreakdownItem",
     "AICandidateCause",
     "AIEvidenceItem",
     "AIFeedbackPrompt",
     "AIQAReference",
     "AIQAReferenceChunk",
     "AIQAReferenceDocAgg",
+    "AIQAContext",
     "AIQAMeta",
     "AIQARequest",
+    "AIQAReferences",
     "AIQAResponse",
+    "AIReferenceItem",
+    "AISuggestedAction",
+    "AIUsedToolItem",
     "AIQueryAssistantMeta",
     "AIQueryAssistantRequest",
     "AIQueryAssistantResponse",
@@ -95,7 +107,7 @@ __all__ = [
     "CopAnalysisResponse",
     "CopPoint",
     "CopSummary",
-    "DetectedAnomalyPoint",
+    "DetectedAnomalyEvent",
     "Device",
     "DeviceAlarm",
     "DeviceAlarmListResponse",
