@@ -33,6 +33,18 @@ from .schemas_ai import AIQueryAssistantMeta
 from .schemas_ai import AIQueryAssistantRequest
 from .schemas_ai import AIQueryAssistantResponse
 from .schemas_ai import AIQueryIntent
+from .schemas_ai import AIReportSummaryAction
+from .schemas_ai import AIReportSummaryAnomalySnapshotInput
+from .schemas_ai import AIReportSummaryContextInput
+from .schemas_ai import AIReportSummaryEvidence
+from .schemas_ai import AIReportSummaryHighlight
+from .schemas_ai import AIReportSummaryMeta
+from .schemas_ai import AIReportSummaryMetricsSnapshotInput
+from .schemas_ai import AIReportSummaryPageContext
+from .schemas_ai import AIReportSummaryRequest
+from .schemas_ai import AIReportSummaryResponse
+from .schemas_ai import AIReportSummarySuggestion
+from .schemas_ai import AIReportSummaryTrendInput
 from .schemas_ai import AnomalyFeedbackMeta
 from .schemas_ai import AnomalyFeedbackRequest
 from .schemas_ai import AnomalyFeedbackResponse
@@ -123,6 +135,18 @@ __all__ = [
     "AIQueryAssistantRequest",
     "AIQueryAssistantResponse",
     "AIQueryIntent",
+    "AIReportSummaryAction",
+    "AIReportSummaryAnomalySnapshotInput",
+    "AIReportSummaryContextInput",
+    "AIReportSummaryEvidence",
+    "AIReportSummaryHighlight",
+    "AIReportSummaryMeta",
+    "AIReportSummaryMetricsSnapshotInput",
+    "AIReportSummaryPageContext",
+    "AIReportSummaryRequest",
+    "AIReportSummaryResponse",
+    "AIReportSummarySuggestion",
+    "AIReportSummaryTrendInput",
     "AnomalyFeedbackMeta",
     "AnomalyFeedbackRequest",
     "AnomalyFeedbackResponse",

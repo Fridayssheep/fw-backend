@@ -81,6 +81,24 @@ OPS_GUIDE_SYSTEM_PROMPT = """\
 """
 
 
+REPORT_SUMMARY_SYSTEM_PROMPT = """\
+你是“建筑能源 AI 报表总结助手”。
+
+你的任务是基于已经补全的报表上下文、页面指标、趋势摘要和可选异常洞察，
+输出一份适合前端展示或管理汇报的结构化总结。
+
+必须遵守以下规则：
+1. 不要假装自己执行了新的数据查询，只能基于输入中的报表上下文总结。
+2. 先写主结论 summary，再输出 highlights、risks、suggestions。
+3. highlights 必须是结构化数组，不要输出纯字符串数组。
+4. suggestions 要可执行，但不要发明未出现过的业务结论。
+5. 如果 anomaly insight 存在，只能把它表述为“异常洞察”或“需关注信号”，不能写成已确认故障。
+6. 如果上下文不足，status 使用 needs_more_context；如果结论不够稳，status 使用 low_confidence；否则使用 ready。
+7. 输出必须是合法 JSON，不要输出 Markdown，不要输出代码块。
+8. summary、highlights、risks、suggestions 全部使用简洁专业的中文。
+"""
+
+
 def _json_default_serializer(value: Any) -> Any:
     """JSON 序列化兜底：时间类型转 ISO 字符串。"""
     if isinstance(value, (datetime, date)):
@@ -381,6 +399,68 @@ def build_ops_guide_prompts(
 {_json_block(output_schema_hint)}
 """
     return OPS_GUIDE_SYSTEM_PROMPT, user_prompt
+
+
+def build_report_summary_prompts(
+    report_context: dict[str, Any],
+    anomaly_insight: dict[str, Any] | None,
+    allowed_action_targets: tuple[str, ...],
+) -> tuple[str, str]:
+    """构造 AI 报表总结提示词。"""
+
+    output_schema_hint = {
+        "status": "ready",
+        "summary": "一句话概括本周期能耗、趋势和异常关注点",
+        "highlights": [
+            {
+                "title": "总量变化",
+                "detail": "本周期总用电较对比周期下降约 12%。",
+                "priority": "high",
+            }
+        ],
+        "risks": [
+            "当前异常洞察仍需人工复核，不能直接视为已确认故障。"
+        ],
+        "suggestions": [
+            {
+                "label": "继续关注异常高值时段的设备启停记录",
+                "type": "investigate",
+                "rationale": "当前窗口存在突发极值事件。",
+            }
+        ],
+    }
+
+    allowed_targets_text = "\n".join(f"- {item}" for item in allowed_action_targets)
+    user_prompt = f"""\
+请根据下面已经补全的报表上下文，生成一份结构化报表总结。
+
+【报表上下文】
+{_json_block(report_context)}
+
+【异常洞察】
+{_json_block(anomaly_insight)}
+
+【允许使用的 actions.target】
+{allowed_targets_text}
+
+【输出要求】
+1. 只输出一个合法 JSON 对象。
+2. 顶层字段必须严格包含：
+   status, summary, highlights, risks, suggestions
+3. highlights 至少返回 2 条，最多返回 5 条。
+4. 每个 highlight 必须包含：
+   title, detail, priority
+5. priority 只能取 high / medium / low。
+6. 每个 suggestion 必须包含：
+   label, type, rationale
+7. suggestion.type 只能从 monitor / investigate / optimize / followup 中选择。
+8. 不要输出 evidence、actions、meta，这些由后端根据结构化结果自行拼装。
+9. 如果 anomaly insight 为 null，就不要编造异常原因。
+
+【输出 JSON 骨架示例】
+{_json_block(output_schema_hint)}
+"""
+    return REPORT_SUMMARY_SYSTEM_PROMPT, user_prompt
 
 
 def build_query_assistant_prompts(

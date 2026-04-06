@@ -6,6 +6,7 @@ from ai.backend.feedback_service import submit_anomaly_feedback
 from ai.backend.ops_guide_service import get_ops_guide
 from ai.backend.qa_service import ask_ai_question
 from ai.backend.query_assistant_service import build_query_intent
+from ai.backend.report_summary_service import get_report_summary
 from ai.backend.ragflow_client import RagFlowAuthenticationError
 from ai.backend.ragflow_client import RagFlowConfigurationError
 from ai.backend.ragflow_client import RagFlowInvalidResponseError
@@ -21,6 +22,8 @@ from app.schemas.schemas_ai import AIQARequest
 from app.schemas.schemas_ai import AIQAResponse
 from app.schemas.schemas_ai import AIQueryAssistantRequest
 from app.schemas.schemas_ai import AIQueryAssistantResponse
+from app.schemas.schemas_ai import AIReportSummaryRequest
+from app.schemas.schemas_ai import AIReportSummaryResponse
 from app.schemas.schemas_ai import AnomalyFeedbackRequest
 from app.schemas.schemas_ai import AnomalyFeedbackResponse
 
@@ -90,6 +93,32 @@ def get_ai_ops_guide_api(payload: AIOpsGuideRequest) -> AIOpsGuideResponse:
     """
     try:
         return get_ops_guide(payload)
+    except RagFlowConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RagFlowAuthenticationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RagFlowNotFoundError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RagFlowTimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
+    except (RagFlowUpstreamError, RagFlowInvalidResponseError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+# ============================================================================
+# AI 报表总结接口
+# ============================================================================
+
+
+@router.post("/ai/report-summary", response_model=AIReportSummaryResponse, summary="AI 报表总结")
+def get_ai_report_summary_api(payload: AIReportSummaryRequest) -> AIReportSummaryResponse:
+    """AI 报表总结接口。
+
+    前端只需要传递当前页面已知的最小报表素材，后端会在内部补全 report_context，
+    结合可选的异常洞察生成结构化摘要、亮点、风险和建议动作。
+    """
+    try:
+        return get_report_summary(payload)
     except RagFlowConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except RagFlowAuthenticationError as exc:

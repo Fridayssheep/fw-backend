@@ -259,6 +259,103 @@ class AIOpsGuideResponse(BaseModel):
     meta: AIOpsGuideMeta = Field(..., description="调用元信息")
 
 
+class AIReportSummaryMetricsSnapshotInput(BaseModel):
+    total: float | None = Field(None, description="当前时间范围总量")
+    average: float | None = Field(None, description="当前时间范围均值")
+    peak: float | None = Field(None, description="当前时间范围峰值")
+    peak_time: datetime | None = Field(None, description="峰值时间")
+    unit: str | None = Field(None, description="单位，如 kWh")
+    compare_total: float | None = Field(None, description="对比周期总量")
+    compare_change_rate: float | None = Field(None, description="相对对比周期变化率")
+
+
+class AIReportSummaryTrendInput(BaseModel):
+    direction: str | None = Field(None, description="趋势方向：up / down / flat")
+    change_rate: float | None = Field(None, description="趋势变化率")
+    peak_days: list[str] = Field(default_factory=list, description="高峰日期")
+    low_days: list[str] = Field(default_factory=list, description="低谷日期")
+    notes: list[str] = Field(default_factory=list, description="前端已有趋势备注")
+
+
+class AIReportSummaryAnomalySnapshotInput(BaseModel):
+    summary: str | None = Field(None, description="前端当前页面已有的异常摘要")
+    analysis_mode: str | None = Field(None, description="异常分析模式")
+    event_count: int | None = Field(None, description="当前页面已知异常事件数")
+    detector_breakdown: list[AnomalyDetectorBreakdownItem] = Field(default_factory=list, description="检测器分布")
+
+
+class AIReportSummaryPageContext(BaseModel):
+    source: str | None = Field(None, description="入口来源，如 report_center、dashboard")
+    page_type: str | None = Field(None, description="当前页面类型")
+    current_chart_range: str | None = Field(None, description="当前图表时间范围标记")
+
+
+class AIReportSummaryContextInput(BaseModel):
+    building_id: str = Field(..., description="当前报表对应的建筑 ID")
+    meter: str | None = Field(None, description="当前报表对应的表计类型")
+    time_range: TimeRange = Field(..., description="当前报表时间范围")
+    page_context: AIReportSummaryPageContext | None = Field(None, description="页面来源和展示上下文")
+    metrics_snapshot: AIReportSummaryMetricsSnapshotInput | None = Field(None, description="页面已有指标摘要")
+    trend_summary: AIReportSummaryTrendInput | None = Field(None, description="页面已有趋势摘要")
+    anomaly_summary: AIReportSummaryAnomalySnapshotInput | None = Field(None, description="页面已有异常摘要")
+
+
+class AIReportSummaryRequest(BaseModel):
+    question: str | None = Field(None, description="可选补充问题，不传则使用默认报表总结问题")
+    report_type: str = Field(default="summary_card", description="报表类型：summary_card / weekly_summary / monthly_summary / anomaly_brief")
+    audience: str = Field(default="manager", description="目标受众：operator / manager / executive")
+    context: AIReportSummaryContextInput = Field(..., description="前端已知的最小报表上下文")
+    include_anomaly_insight: bool = Field(default=True, description="是否补充异常分析洞察")
+    include_actions: bool = Field(default=True, description="是否返回建议动作")
+
+
+class AIReportSummaryHighlight(BaseModel):
+    title: str = Field(..., description="亮点标题")
+    detail: str = Field(..., description="亮点说明")
+    priority: str | None = Field(None, description="优先级：high / medium / low")
+
+
+class AIReportSummarySuggestion(BaseModel):
+    label: str = Field(..., description="建议文案")
+    type: str = Field(..., description="建议类型：monitor / investigate / optimize / followup")
+    rationale: str | None = Field(None, description="建议依据")
+
+
+class AIReportSummaryEvidence(BaseModel):
+    source_type: str = Field(..., description="证据来源类型：data / anomaly / knowledge")
+    source: str = Field(..., description="证据来源名")
+    snippet: str = Field(..., description="证据摘要")
+    score: float | None = Field(None, description="相关性或证据权重")
+
+
+class AIReportSummaryAction(BaseModel):
+    label: str = Field(..., description="动作文案")
+    action_type: str = Field(..., description="动作类型")
+    target: str | None = Field(None, description="动作目标")
+
+
+class AIReportSummaryMeta(BaseModel):
+    generated_at: datetime = Field(..., description="生成时间")
+    model: str = Field(..., description="本次使用的主模型")
+    report_type: str = Field(..., description="报表类型")
+    audience: str = Field(..., description="目标受众")
+    used_tools: list[str] = Field(default_factory=list, description="内部已使用工具")
+    context_source: str = Field(default="server_enriched", description="上下文补全来源")
+    anomaly_insight_used: bool = Field(default=False, description="是否补充了异常分析洞察")
+    stage_timings_ms: dict[str, int] = Field(default_factory=dict, description="分阶段耗时")
+
+
+class AIReportSummaryResponse(BaseModel):
+    status: str = Field(..., description="结果状态：ready / low_confidence / needs_more_context")
+    summary: str = Field(..., description="报表总结摘要")
+    highlights: list[AIReportSummaryHighlight] = Field(default_factory=list, description="结构化亮点")
+    risks: list[str] = Field(default_factory=list, description="风险提示")
+    suggestions: list[AIReportSummarySuggestion] = Field(default_factory=list, description="建议列表")
+    evidence: list[AIReportSummaryEvidence] = Field(default_factory=list, description="关键证据")
+    actions: list[AIReportSummaryAction] = Field(default_factory=list, description="建议前端动作")
+    meta: AIReportSummaryMeta = Field(..., description="调用元信息")
+
+
 class AIQARequest(BaseModel):
     question: str = Field(..., description="用户提出的问题")
     session_id: str | None = Field(None, description="会话 ID，用于保持多轮对话上下文")

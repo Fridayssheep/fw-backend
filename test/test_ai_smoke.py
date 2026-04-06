@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
+import sys
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+BASE_DIR = Path(__file__).resolve().parents[1]
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from fastapi.testclient import TestClient
 
+from ai.backend import ops_guide_service
 from ai.backend import qa_service
+from ai.backend import report_summary_service
 from ai.backend.anomaly_service import _normalize_llm_response
 from ai.backend.config import get_ai_settings
 from ai.backend.query_assistant_service import build_query_intent
@@ -30,8 +37,6 @@ from app.schemas import EnergyPoint
 from app.schemas import EnergySeries
 from app.schemas import TimeRange
 
-
-BASE_DIR = Path(__file__).resolve().parents[1]
 REPORT_JSON_PATH = BASE_DIR / "test" / "ai_smoke_report.json"
 
 
@@ -165,13 +170,19 @@ def build_dummy_ai_anomaly_response() -> AIAnalyzeAnomalyResponse:
 
 
 @contextmanager
-def patched_qa_dependencies() -> Any:
-    """为 /ai/qa smoke test 打补丁，避免依赖真实环境。"""
+def patched_ai_dependencies() -> Any:
+    """为 /ai/qa 和 /ai/ops-guide smoke test 打补丁，避免依赖真实环境。"""
 
     orig_search = qa_service.search_domain_knowledge_references
     orig_generate = qa_service.OpenAICompatibleClient.generate_json
     orig_query = qa_service.build_query_intent
     orig_analyze = qa_service.analyze_anomaly_with_ai
+    orig_ops_search = ops_guide_service.search_domain_knowledge_references
+    orig_ops_generate = ops_guide_service.OpenAICompatibleClient.generate_json
+    orig_ops_analyze = ops_guide_service.analyze_anomaly_with_ai
+    orig_ops_history = ops_guide_service.retrieve_similar_feedback_cases
+    orig_report_generate = report_summary_service.OpenAICompatibleClient.generate_json
+    orig_report_analyze = report_summary_service.analyze_anomaly_with_ai
 
     def fake_search(question: str, *, top_k: int = 5) -> dict[str, list[dict[str, Any]]]:
         return {
@@ -195,6 +206,67 @@ def patched_qa_dependencies() -> Any:
         }
 
     def fake_generate_json(self, system_prompt: str, user_prompt: str) -> dict[str, str]:
+        if "运维指导助手" in system_prompt:
+            return {
+                "status": "actionable",
+                "summary": "建议先核查排班与运行日历，再检查异常时段设备启停和控制策略。",
+                "preconditions": [
+                    "确认当前建筑、表计和时间范围与接手事件一致。",
+                    "确认当前指导基于离线异常事件分析结果。"
+                ],
+                "steps": [
+                    {
+                        "step_id": "step_1",
+                        "title": "优先排查：负荷模式变化",
+                        "instruction": "先核查异常时段是否处于节假日、调休或特殊排班。",
+                        "priority": "high",
+                        "expected_result": "判断是否属于业务侧导致的规律变化。",
+                        "if_not_met": "若无明显排班变化，继续核查设备启停记录。"
+                    },
+                    {
+                        "step_id": "step_2",
+                        "title": "继续核查：异常用能增加",
+                        "instruction": "检查异常时段是否存在额外设备开启或异常启停。",
+                        "priority": "medium",
+                        "expected_result": "确认是否存在突发负荷来源。",
+                        "if_not_met": "若仍无法确认，查看历史相似案例并升级处理。"
+                    }
+                ],
+                "risk_notice": [
+                    "当前结果属于运维指导，不代表故障已确认。"
+                ],
+                "applicability": {
+                    "applies_to": ["离线异常事件接手后的排查场景"],
+                    "not_applies_to": ["缺少上下文的自由问答场景"]
+                }
+            }
+        if "报表总结助手" in system_prompt:
+            return {
+                "status": "ready",
+                "summary": "本周期总用电整体平稳，存在少量异常波动，建议结合趋势图继续关注高值时段。",
+                "highlights": [
+                    {
+                        "title": "总量概览",
+                        "detail": "当前时间范围总量和均值处于可控范围内。",
+                        "priority": "high",
+                    },
+                    {
+                        "title": "异常关注点",
+                        "detail": "存在离线异常事件，需要继续核查高值时段设备启停。",
+                        "priority": "medium",
+                    }
+                ],
+                "risks": [
+                    "当前异常洞察属于需关注信号，不代表故障已确认。"
+                ],
+                "suggestions": [
+                    {
+                        "label": "查看异常高值时段设备启停记录",
+                        "type": "investigate",
+                        "rationale": "当前窗口存在突发性高值波动。"
+                    }
+                ],
+            }
         if "综合问答助手" in system_prompt:
             return {
                 "answer": "综合来看，知识库说明这台泵的环境要求是温度不超过40℃、海拔不高于1000m；同时如果你还要判断异常原因，建议继续查看最近趋势和异常分析结果。"
@@ -221,10 +293,35 @@ def patched_qa_dependencies() -> Any:
     def fake_analyze_anomaly(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomalyResponse:
         return build_dummy_ai_anomaly_response()
 
+    def fake_retrieve_history_cases(
+        building_id: str,
+        meter: str,
+        start_time: str,
+        end_time: str,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        _ = building_id, meter, start_time, end_time, limit
+        return [
+            {
+                "analysis_id": "ana_hist_001",
+                "selected_cause_id": "load_shift",
+                "selected_score": 4,
+                "resolution_status": "confirmed",
+                "comment": "历史上同类波动与节假日排班变化有关。",
+                "created_at": "2026-04-01T10:00:00+08:00",
+            }
+        ]
+
     qa_service.search_domain_knowledge_references = fake_search
     qa_service.OpenAICompatibleClient.generate_json = fake_generate_json
     qa_service.build_query_intent = fake_build_query_intent
     qa_service.analyze_anomaly_with_ai = fake_analyze_anomaly
+    ops_guide_service.search_domain_knowledge_references = fake_search
+    ops_guide_service.OpenAICompatibleClient.generate_json = fake_generate_json
+    ops_guide_service.analyze_anomaly_with_ai = fake_analyze_anomaly
+    ops_guide_service.retrieve_similar_feedback_cases = fake_retrieve_history_cases
+    report_summary_service.OpenAICompatibleClient.generate_json = fake_generate_json
+    report_summary_service.analyze_anomaly_with_ai = fake_analyze_anomaly
     try:
         yield
     finally:
@@ -232,6 +329,12 @@ def patched_qa_dependencies() -> Any:
         qa_service.OpenAICompatibleClient.generate_json = orig_generate
         qa_service.build_query_intent = orig_query
         qa_service.analyze_anomaly_with_ai = orig_analyze
+        ops_guide_service.search_domain_knowledge_references = orig_ops_search
+        ops_guide_service.OpenAICompatibleClient.generate_json = orig_ops_generate
+        ops_guide_service.analyze_anomaly_with_ai = orig_ops_analyze
+        ops_guide_service.retrieve_similar_feedback_cases = orig_ops_history
+        report_summary_service.OpenAICompatibleClient.generate_json = orig_report_generate
+        report_summary_service.analyze_anomaly_with_ai = orig_report_analyze
 
 
 def run_service_query_assistant_test() -> dict[str, Any]:
@@ -343,7 +446,7 @@ def run_action_whitelist_test() -> dict[str, Any]:
 
 
 def run_ai_qa_knowledge_test() -> dict[str, Any]:
-    with patched_qa_dependencies():
+    with patched_ai_dependencies():
         client = TestClient(app)
         response = client.post(
             "/ai/qa",
@@ -362,7 +465,7 @@ def run_ai_qa_knowledge_test() -> dict[str, Any]:
 
 
 def run_ai_qa_data_query_test() -> dict[str, Any]:
-    with patched_qa_dependencies():
+    with patched_ai_dependencies():
         client = TestClient(app)
         response = client.post(
             "/ai/qa",
@@ -390,7 +493,7 @@ def run_ai_qa_data_query_test() -> dict[str, Any]:
 
 
 def run_ai_qa_fault_without_context_test() -> dict[str, Any]:
-    with patched_qa_dependencies():
+    with patched_ai_dependencies():
         client = TestClient(app)
         response = client.post(
             "/ai/qa",
@@ -409,7 +512,7 @@ def run_ai_qa_fault_without_context_test() -> dict[str, Any]:
 
 
 def run_ai_qa_mixed_test() -> dict[str, Any]:
-    with patched_qa_dependencies():
+    with patched_ai_dependencies():
         client = TestClient(app)
         response = client.post(
             "/ai/qa",
@@ -441,6 +544,191 @@ def run_ai_qa_mixed_test() -> dict[str, Any]:
     }
 
 
+def run_ai_ops_guide_test() -> dict[str, Any]:
+    with patched_ai_dependencies():
+        client = TestClient(app)
+        response = client.post(
+            "/ai/ops-guide",
+            json={
+                "guide_mode": "standard_sop",
+                "context": {
+                    "building_id": "Bear_assembly_Angel",
+                    "meter": "electricity",
+                    "time_range": {
+                        "start": "2017-01-01T00:00:00+00:00",
+                        "end": "2017-01-02T00:00:00+00:00",
+                    },
+                    "incident_ref": {
+                        "incident_id": "inc_smoke_001",
+                        "message_id": "msg_smoke_001",
+                    },
+                    "page_context": {
+                        "source": "message_center",
+                        "page_type": "anomaly_takeover",
+                        "current_chart_range": "7d",
+                    },
+                    "operator_context": {
+                        "operator_id": "op_001",
+                        "operator_name": "Codex Tester",
+                    },
+                    "anomaly_snapshot": {
+                        "summary": "检测到 2 个离线异常事件。",
+                        "analysis_mode": "offline_event_review",
+                        "event_count": 2,
+                        "detector_breakdown": [
+                            {
+                                "detected_by": "z_score_detector",
+                                "event_type": "point_outlier",
+                                "count": 1,
+                            }
+                        ],
+                        "event_ids": ["evt_1"],
+                    },
+                },
+            },
+        )
+    body = response.json()
+    return {
+        "status_code": response.status_code,
+        "status": body.get("status"),
+        "incident_id": body.get("incident_id"),
+        "step_count": len(body.get("steps", [])),
+        "first_step_title": (body.get("steps") or [{}])[0].get("title"),
+        "evidence_count": len(body.get("evidence", [])),
+        "action_targets": [item.get("target") for item in body.get("actions", [])],
+        "used_tools": body.get("meta", {}).get("used_tools", []),
+        "knowledge_hits": body.get("meta", {}).get("knowledge_hits"),
+        "history_feedback_hits": body.get("meta", {}).get("history_feedback_hits"),
+    }
+
+
+def run_ai_ops_guide_without_actions_test() -> dict[str, Any]:
+    with patched_ai_dependencies():
+        client = TestClient(app)
+        response = client.post(
+            "/ai/ops-guide",
+            json={
+                "guide_mode": "quick_check",
+                "include_actions": False,
+                "include_knowledge": False,
+                "include_history": False,
+                "context": {
+                    "building_id": "Bear_assembly_Angel",
+                    "meter": "electricity",
+                    "time_range": {
+                        "start": "2017-01-01T00:00:00+00:00",
+                        "end": "2017-01-02T00:00:00+00:00",
+                    },
+                },
+            },
+        )
+    body = response.json()
+    return {
+        "status_code": response.status_code,
+        "status": body.get("status"),
+        "step_count": len(body.get("steps", [])),
+        "action_count": len(body.get("actions", [])),
+        "knowledge_hits": body.get("meta", {}).get("knowledge_hits"),
+        "history_feedback_hits": body.get("meta", {}).get("history_feedback_hits"),
+    }
+
+
+def run_ai_report_summary_test() -> dict[str, Any]:
+    with patched_ai_dependencies():
+        client = TestClient(app)
+        response = client.post(
+            "/ai/report-summary",
+            json={
+                "report_type": "weekly_summary",
+                "audience": "manager",
+                "context": {
+                    "building_id": "Bear_assembly_Angel",
+                    "meter": "electricity",
+                    "time_range": {
+                        "start": "2017-01-01T00:00:00+00:00",
+                        "end": "2017-01-07T00:00:00+00:00",
+                    },
+                    "page_context": {
+                        "source": "report_center",
+                        "page_type": "weekly_card",
+                        "current_chart_range": "7d",
+                    },
+                    "metrics_snapshot": {
+                        "total": 4210.4,
+                        "average": 601.5,
+                        "peak": 927.0,
+                        "peak_time": "2017-01-01T18:00:00+00:00",
+                        "unit": "kWh",
+                        "compare_change_rate": -0.08,
+                    },
+                    "trend_summary": {
+                        "direction": "down",
+                        "change_rate": -0.08,
+                        "peak_days": ["2017-01-01"],
+                        "low_days": ["2017-01-03"],
+                    },
+                    "anomaly_summary": {
+                        "summary": "检测到 2 个离线异常事件。",
+                        "analysis_mode": "offline_event_review",
+                        "event_count": 2,
+                        "detector_breakdown": [
+                            {
+                                "detected_by": "z_score_detector",
+                                "event_type": "point_outlier",
+                                "count": 1,
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+    body = response.json()
+    return {
+        "status_code": response.status_code,
+        "status": body.get("status"),
+        "highlight_count": len(body.get("highlights", [])),
+        "risk_count": len(body.get("risks", [])),
+        "suggestion_types": [item.get("type") for item in body.get("suggestions", [])],
+        "evidence_count": len(body.get("evidence", [])),
+        "action_targets": [item.get("target") for item in body.get("actions", [])],
+        "used_tools": body.get("meta", {}).get("used_tools", []),
+        "anomaly_insight_used": body.get("meta", {}).get("anomaly_insight_used"),
+    }
+
+
+def run_ai_report_summary_without_anomaly_test() -> dict[str, Any]:
+    with patched_ai_dependencies():
+        client = TestClient(app)
+        response = client.post(
+            "/ai/report-summary",
+            json={
+                "report_type": "summary_card",
+                "audience": "executive",
+                "include_anomaly_insight": False,
+                "include_actions": False,
+                "context": {
+                    "building_id": "Bear_assembly_Angel",
+                    "time_range": {
+                        "start": "2017-01-01T00:00:00+00:00",
+                        "end": "2017-01-07T00:00:00+00:00",
+                    },
+                    "metrics_snapshot": {
+                        "total": 4210.4,
+                        "unit": "kWh",
+                    },
+                },
+            },
+        )
+    body = response.json()
+    return {
+        "status_code": response.status_code,
+        "status": body.get("status"),
+        "action_count": len(body.get("actions", [])),
+        "used_tools": body.get("meta", {}).get("used_tools", []),
+        "anomaly_insight_used": body.get("meta", {}).get("anomaly_insight_used"),
+    }
+
+
 def main() -> None:
     report = {
         "service_query_assistant": run_service_query_assistant_test(),
@@ -450,6 +738,10 @@ def main() -> None:
         "ai_qa_data_query": run_ai_qa_data_query_test(),
         "ai_qa_fault_without_context": run_ai_qa_fault_without_context_test(),
         "ai_qa_mixed": run_ai_qa_mixed_test(),
+        "ai_ops_guide": run_ai_ops_guide_test(),
+        "ai_ops_guide_without_actions": run_ai_ops_guide_without_actions_test(),
+        "ai_report_summary": run_ai_report_summary_test(),
+        "ai_report_summary_without_anomaly": run_ai_report_summary_without_anomaly_test(),
     }
     REPORT_JSON_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
