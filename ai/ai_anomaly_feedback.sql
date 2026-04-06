@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS ai_anomaly_feedback (
     operator_id VARCHAR(128),
     operator_name VARCHAR(128),
     model_name VARCHAR(128),
-    baseline_mode VARCHAR(64),
+    analysis_mode VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_ai_anomaly_feedback_analysis UNIQUE (analysis_id),
@@ -50,4 +50,3 @@ CREATE TABLE IF NOT EXISTS ai_anomaly_feedback_candidate_scores (
 
 CREATE INDEX IF NOT EXISTS idx_ai_anomaly_feedback_candidate_scores_cause
     ON ai_anomaly_feedback_candidate_scores (cause_id);
-

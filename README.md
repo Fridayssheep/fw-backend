@@ -38,7 +38,17 @@ uv pip install -r requirements.txt
 
 ### 3. 配置数据库环境变量
 
-如果数据库跑在你当前 Docker 容器映射端口：
+建议先参考根目录下的 `.env.example` 整理一份你自己的环境变量。
+
+如果你本地只是手动启动后端，可以先复制一份模板作为填写参考：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+注意：当前项目默认直接读取进程环境变量，`.env` 主要作为模板文件使用；实际运行时请确保这些变量已经被 shell、IDE 或部署平台注入。
+
+如果数据库跑在你当前 Docker 容器映射端口，可以至少配置下面这些：
 
 ```powershell
 $env:DB_HOST = "127.0.0.1"

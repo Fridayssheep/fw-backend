@@ -5,17 +5,20 @@ import os
 import time
 
 # PostgreSQL 连接字符串配置
-DB_USER = 'admin'
-DB_PASSWORD = 'adminpassword'
-DB_HOST = 'localhost'
-DB_PORT = '15432'
-DB_NAME = 'building_energy'
+DB_USER = os.getenv('DB_USER', 'admin')
+DB_PASSWORD = os.getenv('DB_PASSWORD', 'adminpassword')
+DB_HOST = os.getenv('DB_HOST', '127.0.0.1')
+DB_PORT = os.getenv('DB_PORT', '5432')
+DB_NAME = os.getenv('DB_NAME', 'building_energy')
 
-DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+DATABASE_URL = os.getenv('DATABASE_URL', '').strip() or f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 engine = create_engine(DATABASE_URL)
 
 # 数据文件相对路径
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
+BASE_DIR = os.getenv(
+    'DATA_BASE_DIR',
+    os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data')),
+)
 METADATA_PATH = os.path.join(BASE_DIR, 'metadata', 'metadata.csv')
 CLEANED_DATA = os.path.join(BASE_DIR, 'cleaned', '*_cleaned.csv')
 WEATHER_PATH = os.path.join(BASE_DIR, 'weather', 'weather.csv')

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,9 +13,9 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 MCP_SERVER_PATH = BASE_DIR / 'ai' / 'mcp' / 'server.py'
 REPORT_JSON_PATH = BASE_DIR / 'test' / 'energy_mcp_smoke_report.json'
 REPORT_MD_PATH = BASE_DIR / 'test' / 'energy_mcp_smoke_report.md'
-BACKEND_BASE_URL = 'http://127.0.0.1:8000'
-TIME_START = '2017-01-01T00:00:00+00:00'
-TIME_END = '2017-01-07T00:00:00+00:00'
+BACKEND_BASE_URL = os.getenv('BACKEND_BASE_URL', 'http://127.0.0.1:8000')
+TIME_START = os.getenv('MCP_DEFAULT_TIME_START', '2017-01-01T00:00:00+00:00')
+TIME_END = os.getenv('MCP_DEFAULT_TIME_END', '2017-01-07T00:00:00+00:00')
 
 
 def load_mcp_module():

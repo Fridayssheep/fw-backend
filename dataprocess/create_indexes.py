@@ -1,5 +1,6 @@
 import os
 import time
+from urllib.parse import urlparse
 
 import psycopg2
 
@@ -9,17 +10,31 @@ DB_PASSWORD = os.getenv('DB_PASSWORD', 'adminpassword')
 DB_HOST = os.getenv('DB_HOST', '127.0.0.1')
 DB_PORT = os.getenv('DB_PORT', '5432')
 DB_NAME = os.getenv('DB_NAME', 'building_energy')
+DATABASE_URL = os.getenv('DATABASE_URL', '').strip()
+
+
+def build_connection_kwargs() -> dict[str, str]:
+    if DATABASE_URL:
+        parsed = urlparse(DATABASE_URL)
+        return {
+            'dbname': (parsed.path or '').lstrip('/'),
+            'user': parsed.username or '',
+            'password': parsed.password or '',
+            'host': parsed.hostname or '',
+            'port': str(parsed.port or ''),
+        }
+    return {
+        'dbname': DB_NAME,
+        'user': DB_USER,
+        'password': DB_PASSWORD,
+        'host': DB_HOST,
+        'port': DB_PORT,
+    }
 
 def create_indexes():
     print("==== 开始为 PostgreSQL 数据库创建索引 ====")
     # 使用 psycopg2 直接连接，以支持执行无法在事务中运行的扩展创建命令
-    conn = psycopg2.connect(
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        host=DB_HOST,
-        port=DB_PORT
-    )
+    conn = psycopg2.connect(**build_connection_kwargs())
     conn.autocommit = True
     cursor = conn.cursor()
 

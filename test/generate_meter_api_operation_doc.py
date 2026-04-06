@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 DOC_PATH = BASE_DIR / "meters接口详细操作文档.md"
 PARAM_JSON_PATH = BASE_DIR / "test" / "meter_api_parameter_values.json"
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
-DB_PORT = os.getenv("DB_PORT", "15432")
+DB_PORT = os.getenv("DB_PORT", "5432")
 
 
 def format_type(schema_fragment: dict[str, Any]) -> str:

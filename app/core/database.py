@@ -8,12 +8,22 @@ from sqlalchemy.engine import Engine  # 导入引擎类型，方便做类型标�
 
 
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")  # 读取数据库主机地址，默认使用本机映射地址。
-DB_PORT = os.getenv("DB_PORT", "15432")  # 读取数据库端口，默认使用当前 Docker 容器映射到宿主机的 15432 端口。
+DB_PORT = os.getenv("DB_PORT", "5432")  # 读取数据库端口，默认使用 PostgreSQL 默认端口。
 DB_NAME = os.getenv("DB_NAME", "building_energy")  # 读取数据库名，默认使用当前项目数据库。
 DB_USER = os.getenv("DB_USER", "admin")  # 读取数据库用户名，默认使用项目初始化账号。
 DB_PASSWORD = os.getenv("DB_PASSWORD", "adminpassword")  # 读取数据库密码，默认使用项目初始化密码。
 
-DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"  # 按原来的 psycopg2 写法拼接 SQLAlchemy 连接串。
+
+def _build_database_url() -> str:
+    """优先使用完整 DATABASE_URL，未提供时再回退到拆分的 DB_* 环境变量。"""
+
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if database_url:
+        return database_url
+    return f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+
+DATABASE_URL = _build_database_url()  # 按原来的 psycopg2 写法拼接 SQLAlchemy 连接串。
 
 
 engine: Engine = create_engine(  # 创建同步数据库引擎，当前项目用同步方式最简单直接。

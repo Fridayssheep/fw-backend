@@ -81,7 +81,7 @@ def submit_anomaly_feedback(payload: AnomalyFeedbackRequest) -> AnomalyFeedbackR
             operator_id,
             operator_name,
             model_name,
-            baseline_mode
+            analysis_mode
         ) VALUES (
             :feedback_id,
             :analysis_id,
@@ -96,7 +96,7 @@ def submit_anomaly_feedback(payload: AnomalyFeedbackRequest) -> AnomalyFeedbackR
             :operator_id,
             :operator_name,
             :model_name,
-            :baseline_mode
+            :analysis_mode
         )
         """
     )
@@ -135,7 +135,7 @@ def submit_anomaly_feedback(payload: AnomalyFeedbackRequest) -> AnomalyFeedbackR
                     'operator_id': payload.operator_id,
                     'operator_name': payload.operator_name,
                     'model_name': payload.model_name,
-                    'baseline_mode': payload.analysis_mode,
+                    'analysis_mode': payload.analysis_mode,
                 },
             )
             for item in candidate_feedbacks:

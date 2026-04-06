@@ -19,7 +19,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 REPORT_JSON_PATH = BASE_DIR / "test" / "meter_api_migration_validation.json"
 REPORT_MD_PATH = BASE_DIR / "test" / "meter_api_migration_report.md"
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
-DB_PORT = int(os.getenv("DB_PORT", "15432"))
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
 METER_SCAN_LIMIT = 5
 
 
