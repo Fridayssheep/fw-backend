@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI
+from fastapi import FastAPI
 from fastapi import Request
 from fastapi import status
 from fastapi.responses import JSONResponse
@@ -18,6 +18,12 @@ app = FastAPI(
     version="0.3.0-local-impl",
     description="Minimal runnable implementation for system, energy, buildings, meters, and AI routes.",
 )
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    from app.core.init_db import init_database
+    init_database()
 
 
 @app.exception_handler(ResourceNotFoundError)
