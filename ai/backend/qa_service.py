@@ -13,7 +13,17 @@ from app.schemas import AIReferenceItem
 from app.schemas import AISuggestedAction
 from app.schemas import AIUsedToolItem
 from app.schemas import AIQueryAssistantRequest
+from app.services.services_energy import get_energy_compare
+from app.services.services_energy import get_energy_query
+from app.services.services_energy import get_energy_rankings
+from app.services.services_energy import get_energy_trend
+from app.services.services_energy import get_energy_weather_correlation
 from app.services.service_common import get_taipei_now
+from ai.mcp.formatters import _summarize_energy_compare
+from ai.mcp.formatters import _summarize_energy_query
+from ai.mcp.formatters import _summarize_energy_rankings
+from ai.mcp.formatters import _summarize_energy_trend
+from ai.mcp.formatters import _summarize_weather_correlation
 
 from .anomaly_service import analyze_anomaly_with_ai
 from .config import get_ai_settings
@@ -26,7 +36,9 @@ from .qa_session_service import get_or_create_session
 from .qa_session_service import load_recent_messages
 from .qa_session_service import rewrite_followup_question
 from .qa_session_service import save_assistant_message
+from .qa_session_service import save_error_message
 from .qa_session_service import save_user_message
+from .qa_session_service import update_session_failure_state
 from .qa_session_service import update_session_state
 from .query_assistant_service import build_query_intent
 
@@ -88,11 +100,53 @@ MIXED_QA_SYSTEM_PROMPT = """\
 1. 只能基于给定的工具结果作答，不要编造不存在的事实。
 2. 先输出最明确、最直接的主结论，再补充建议动作。
 3. 只有在某个子结果明确标记为信息不足时，才能说“当前信息不足”；如果子结果已经给出明确结论，就不要额外弱化。
-4. 数据查询类结果本质上是“推荐接口与参数”，不要写成已经执行过查询。
+4. 数据查询类结果可能是“已执行查询”或“仅推荐接口”。如果 data_execution_mode 是 executed，可以直接陈述查询结果；如果是 planned，必须明确那只是建议调用。
 5. 不要把次要知识片段扩写成新的规则结论，除非它已经在子结果中被明确写出。
 6. 输出必须是合法 JSON，且只包含一个字段：
    - answer
 """
+
+DATA_TOOL_SELECTION_SYSTEM_PROMPT = """\
+你是“建筑能源总览 AI”中的数据工具选择器。
+
+你的任务是根据用户问题、解析出的查询意图以及候选工具清单，选择最合适的一个数据工具。
+
+必须遵守以下规则：
+1. 只能从给定的 allowed_tools 中选择 tool_name。
+2. 优先选择能直接回答用户问题的工具。
+3. 如果用户明显在问趋势/变化，优先 energy_trend。
+4. 如果用户明显在问明细/列表/原始数据，优先 energy_query。
+5. 如果用户明显在问对比，优先 energy_compare。
+6. 如果用户明显在问排行，优先 energy_rankings。
+7. 如果用户明显在问天气相关性，优先 energy_weather_correlation。
+
+输出必须是合法 JSON，且只包含：
+- tool_name
+- reason
+"""
+
+DATA_RESULT_QA_SYSTEM_PROMPT = """\
+你是“建筑能源总览 AI”中的数据分析助手。
+
+请基于已经执行完成的数据工具结果，用简洁、自然、可信的中文回答用户问题。
+
+必须遵守以下规则：
+1. 只能基于给定的数据工具结果作答，不要编造不存在的数值或趋势。
+2. 优先回答用户最关心的结论，再补充 1-2 个关键观察。
+3. 如果当前结果不足以直接回答问题，要明确说明不足之处。
+4. 不要输出原始 JSON，不要把内部字段名直接抛给用户。
+
+输出必须是合法 JSON，且只包含：
+- answer
+"""
+
+DATA_TOOL_NAME_BY_ENDPOINT = {
+    "/energy/query": "energy_query",
+    "/energy/trend": "energy_trend",
+    "/energy/compare": "energy_compare",
+    "/energy/rankings": "energy_rankings",
+    "/energy/weather-correlation": "energy_weather_correlation",
+}
 
 
 def _trim_text(value: str, max_length: int = MAX_QA_SNIPPET_LENGTH) -> str:
@@ -257,6 +311,33 @@ def _build_data_reference_items(query_result: Any) -> list[AIReferenceItem]:
     ]
 
 
+def _build_executed_data_reference_items(tool_result: dict[str, Any]) -> list[AIReferenceItem]:
+    """把真实执行后的数据工具结果压成前端可展示的数据证据。"""
+
+    items: list[AIReferenceItem] = [
+        AIReferenceItem(
+            source_type="data",
+            document_id=None,
+            document_name=str(tool_result.get("tool_name") or "data_tool"),
+            chunk_id=None,
+            snippet=_trim_text(str(tool_result.get("summary") or ""), max_length=220),
+            score=None,
+        )
+    ]
+    for highlight in list(tool_result.get("highlights") or [])[:2]:
+        items.append(
+            AIReferenceItem(
+                source_type="data",
+                document_id=None,
+                document_name=str(tool_result.get("tool_name") or "data_tool"),
+                chunk_id=None,
+                snippet=_trim_text(str(highlight), max_length=220),
+                score=None,
+            )
+        )
+    return items[:MAX_QA_REFERENCE_ITEMS]
+
+
 def _build_references_from_anomaly(anomaly_result: Any) -> AIQAReferences:
     """把异常分析结果中的 evidence 统一映射到 /ai/qa 引用结构。"""
 
@@ -297,14 +378,14 @@ def _build_actions_from_anomaly(anomaly_result: Any) -> list[AISuggestedAction]:
     return actions
 
 
-def _build_query_action(query_result: Any) -> list[AISuggestedAction]:
-    """把 query-assistant 推荐结果映射成前端动作。"""
+def _build_query_action(query_result: Any, tool_name: str | None = None) -> list[AISuggestedAction]:
+    """把 query-assistant 推荐或真实执行结果映射成前端动作。"""
 
     return [
         AISuggestedAction(
-            label="查看推荐查询",
+            label="查看查询结果" if tool_name else "查看推荐查询",
             action_type="call_api",
-            target=query_result.recommended_endpoint,
+            target=tool_name or query_result.recommended_endpoint,
         )
     ]
 
@@ -349,11 +430,15 @@ def _build_mixed_part(source: str, response: AIQAResponse) -> dict[str, Any]:
     """把子响应压成结构化 mixed 汇总输入。"""
 
     primary_action = response.suggested_actions[0].target if response.suggested_actions else None
+    data_execution_mode = "planned"
+    if response.question_type == "data_query" and any(item.tool_type == "mcp_tool" for item in response.used_tools):
+        data_execution_mode = "executed"
     return {
         "source": source,
         "question_type": response.question_type,
         "answer": response.answer.strip(),
         "has_substantive_findings": _response_has_substantive_findings(response),
+        "data_execution_mode": data_execution_mode,
         "reference_counts": {
             "knowledge": len(response.references.knowledge),
             "data": len(response.references.data),
@@ -384,7 +469,8 @@ def _synthesize_mixed_answer(
     client = OpenAICompatibleClient(settings)
     user_prompt = (
         "请把下面这些工具结果整理成一段简洁、可信、对用户有帮助的最终回答。\n"
-        "如果其中某部分只是建议或推荐，请明确这是建议，不要伪装成已经执行的结果。\n"
+        "如果数据结果标记为 data_execution_mode=planned，请明确这是建议，不要伪装成已经执行的结果；"
+        "如果标记为 executed，则可以直接陈述数据结论。\n"
         "如果某一部分已经给出明确结论，不要再额外加“信息不足”之类的弱化表述。\n\n"
         f"【用户问题】\n{question}\n\n"
         f"【工具结果】\n{clean_parts}\n"
@@ -453,6 +539,159 @@ def _knowledge_answer_is_insufficient(answer: str) -> bool:
         "无法确认",
     )
     return any(marker in normalized for marker in insufficient_markers)
+
+
+def _select_data_tool(question: str, query_result: Any) -> tuple[str, str]:
+    """让主模型在白名单内选择数据工具，失败时回退到 query-assistant 推荐。"""
+
+    fallback_tool_name = DATA_TOOL_NAME_BY_ENDPOINT.get(
+        query_result.recommended_endpoint,
+        "energy_query",
+    )
+    allowed_tools = list(DATA_TOOL_NAME_BY_ENDPOINT.values())
+    settings = get_ai_settings()
+    client = OpenAICompatibleClient(settings)
+    user_prompt = (
+        f"【用户问题】\n{question}\n\n"
+        f"【查询助手解析结果】\n"
+        f"recommended_endpoint={query_result.recommended_endpoint}\n"
+        f"recommended_http_method={query_result.recommended_http_method}\n"
+        f"recommended_query_params={query_result.recommended_query_params}\n"
+        f"warnings={query_result.warnings}\n\n"
+        f"【allowed_tools】\n{allowed_tools}\n"
+    )
+    try:
+        result = client.generate_json(DATA_TOOL_SELECTION_SYSTEM_PROMPT, user_prompt)
+    except Exception:  # noqa: BLE001
+        return fallback_tool_name, "主模型工具选择失败，已回退到 query_assistant 推荐的数据工具。"
+
+    tool_name = str(result.get("tool_name") or "").strip()
+    if tool_name not in allowed_tools:
+        return fallback_tool_name, "主模型返回了非法工具名，已回退到 query_assistant 推荐的数据工具。"
+    reason = str(result.get("reason") or "").strip() or "主模型根据用户问题和查询意图选择了该数据工具。"
+    return tool_name, reason
+
+
+def _execute_data_tool(tool_name: str, query_params: dict[str, Any]) -> dict[str, Any]:
+    """执行受控白名单内的数据工具，并统一返回 MCP 风格结果。"""
+
+    if tool_name == "energy_query":
+        response = get_energy_query(
+            building_ids=query_params.get("building_ids"),
+            site_id=query_params.get("site_id"),
+            meter=query_params.get("meter"),
+            start_time=query_params.get("start_time"),
+            end_time=query_params.get("end_time"),
+            granularity=query_params.get("granularity"),
+            aggregation=query_params.get("aggregation"),
+            page=int(query_params.get("page") or 1),
+            page_size=int(query_params.get("page_size") or 100),
+        )
+        return _summarize_energy_query(
+            response.model_dump(mode="json"),
+            building_ids=list(query_params.get("building_ids") or []),
+            meter=str(query_params.get("meter") or "electricity"),
+            aggregation=query_params.get("aggregation"),
+        )
+
+    if tool_name == "energy_trend":
+        response = get_energy_trend(
+            building_ids=query_params.get("building_ids"),
+            site_id=query_params.get("site_id"),
+            meter=query_params.get("meter"),
+            start_time=query_params.get("start_time"),
+            end_time=query_params.get("end_time"),
+            granularity=query_params.get("granularity"),
+        )
+        return _summarize_energy_trend(
+            response.model_dump(mode="json"),
+            building_ids=list(query_params.get("building_ids") or []),
+            meter=str(query_params.get("meter") or "electricity"),
+            granularity=query_params.get("granularity"),
+        )
+
+    if tool_name == "energy_compare":
+        response = get_energy_compare(
+            building_ids=query_params.get("building_ids"),
+            meter=query_params.get("meter"),
+            start_time=query_params.get("start_time"),
+            end_time=query_params.get("end_time"),
+            metric=query_params.get("metric"),
+        )
+        return _summarize_energy_compare(
+            response.model_dump(mode="json"),
+            building_ids=list(query_params.get("building_ids") or []),
+            meter=str(query_params.get("meter") or "electricity"),
+            metric=str(query_params.get("metric") or "sum"),
+        )
+
+    if tool_name == "energy_rankings":
+        response = get_energy_rankings(
+            meter=query_params.get("meter"),
+            start_time=query_params.get("start_time"),
+            end_time=query_params.get("end_time"),
+            metric=query_params.get("metric"),
+            order=query_params.get("order"),
+            limit=int(query_params.get("limit") or 10),
+        )
+        return _summarize_energy_rankings(
+            response.model_dump(mode="json"),
+            meter=str(query_params.get("meter") or "electricity"),
+            metric=str(query_params.get("metric") or "sum"),
+            order=str(query_params.get("order") or "desc"),
+            limit=int(query_params.get("limit") or 10),
+        )
+
+    if tool_name == "energy_weather_correlation":
+        building_id = str(
+            query_params.get("building_id")
+            or (list(query_params.get("building_ids") or [])[:1] or [""])[0]
+        ).strip()
+        response = get_energy_weather_correlation(
+            building_id=building_id or None,
+            meter=query_params.get("meter"),
+            start_time=query_params.get("start_time"),
+            end_time=query_params.get("end_time"),
+        )
+        return _summarize_weather_correlation(
+            response.model_dump(mode="json"),
+            building_id=building_id,
+            meter=str(query_params.get("meter") or "electricity"),
+        )
+
+    raise ValueError(f"当前不支持的数据工具: {tool_name}")
+
+
+def _fallback_data_answer(query_result: Any, tool_result: dict[str, Any] | None = None) -> str:
+    """在数据工具总结失败时，使用确定性方式兜底回答。"""
+
+    if tool_result:
+        highlights = "；".join(str(item) for item in list(tool_result.get("highlights") or [])[:3])
+        return f"{tool_result.get('summary') or '已执行数据查询。'} {highlights}".strip()
+    warning_text = f" 注意事项：{'；'.join(query_result.warnings)}。" if query_result.warnings else ""
+    return (
+        f"{query_result.summary} 建议调用 {query_result.recommended_endpoint} "
+        f"（{query_result.recommended_http_method}），推荐参数为 {query_result.recommended_query_params}。"
+        f"{warning_text}"
+    )
+
+
+def _generate_data_answer(question: str, tool_result: dict[str, Any], query_warnings: list[str]) -> str:
+    """基于真实执行后的数据工具结果生成最终回答。"""
+
+    settings = get_ai_settings()
+    client = OpenAICompatibleClient(settings)
+    user_prompt = (
+        f"【用户问题】\n{question}\n\n"
+        f"【数据工具结果】\n{tool_result}\n\n"
+        f"【解析阶段提示】\n{query_warnings}\n"
+    )
+    try:
+        result = client.generate_json(DATA_RESULT_QA_SYSTEM_PROMPT, user_prompt)
+    except Exception:  # noqa: BLE001
+        return _fallback_data_answer(query_result=None, tool_result=tool_result)
+    answer = str(result.get("answer") or "").strip()
+    return answer or _fallback_data_answer(query_result=None, tool_result=tool_result)
 
 
 def _handle_knowledge_question(payload: AIQARequest, settings_model: str) -> AIQAResponse:
@@ -528,20 +767,44 @@ def _handle_data_query_question(payload: AIQARequest, settings_model: str) -> AI
     stage_timings_ms = {
         "query_assistant_ms": _duration_ms(query_assistant_start),
     }
-    references = AIQAReferences(data=_build_data_reference_items(query_result))
     used_tools = [
         AIUsedToolItem(
             tool_name="query_assistant",
             tool_type="internal_service",
-            reason="问题属于数据检索场景，需要先解析查询意图和推荐下游接口。",
+            reason="问题属于数据检索场景，需要先解析查询意图并准备数据工具参数。",
         )
     ]
-    warning_text = f" 注意事项：{'；'.join(query_result.warnings)}。" if query_result.warnings else ""
-    answer = (
-        f"{query_result.summary} 建议调用 {query_result.recommended_endpoint} "
-        f"（{query_result.recommended_http_method}），推荐参数为 {query_result.recommended_query_params}。"
-        f"{warning_text}"
-    )
+    references = AIQAReferences()
+    suggested_actions: list[AISuggestedAction] = []
+    answer = ""
+
+    try:
+        tool_selection_start = perf_counter()
+        tool_name, tool_reason = _select_data_tool(payload.question, query_result)
+        stage_timings_ms["data_tool_selection_ms"] = _duration_ms(tool_selection_start)
+        used_tools.append(
+            AIUsedToolItem(
+                tool_name=tool_name,
+                tool_type="mcp_tool",
+                reason=tool_reason,
+            )
+        )
+
+        execution_start = perf_counter()
+        tool_result = _execute_data_tool(tool_name, query_result.recommended_query_params)
+        stage_timings_ms["data_tool_execution_ms"] = _duration_ms(execution_start)
+
+        references = AIQAReferences(data=_build_executed_data_reference_items(tool_result))
+        suggested_actions = _build_query_action(query_result, tool_name=tool_name)
+
+        data_answer_start = perf_counter()
+        answer = _generate_data_answer(payload.question, tool_result, query_result.warnings)
+        stage_timings_ms["data_answer_ms"] = _duration_ms(data_answer_start)
+    except Exception:  # noqa: BLE001
+        references = AIQAReferences(data=_build_data_reference_items(query_result))
+        suggested_actions = _build_query_action(query_result)
+        answer = _fallback_data_answer(query_result)
+
     stage_timings_ms["total_ms"] = _duration_ms(total_start)
     return AIQAResponse(
         session_id="",
@@ -549,7 +812,7 @@ def _handle_data_query_question(payload: AIQARequest, settings_model: str) -> AI
         question_type="data_query",
         references=references,
         used_tools=used_tools,
-        suggested_actions=_build_query_action(query_result),
+        suggested_actions=suggested_actions,
         meta=_build_meta_with_timings(settings_model, used_tools, references, stage_timings_ms),
     )
 
@@ -703,18 +966,28 @@ def ask_ai_question(payload: AIQARequest) -> AIQAResponse:
         context=effective_context,
     )
     save_user_message(session.session_id, payload.question, effective_context)
+    try:
+        question_type = _classify_question_type(runtime_payload.question)
+        if question_type == "data_query":
+            response = _handle_data_query_question(runtime_payload, settings.llm_model)
+        elif question_type == "mixed":
+            response = _handle_mixed_question(runtime_payload, settings.llm_model)
+        elif question_type == "fault_analysis":
+            response = _handle_fault_analysis_question(runtime_payload, settings.llm_model)
+        else:
+            response = _handle_knowledge_question(runtime_payload, settings.llm_model)
 
-    question_type = _classify_question_type(runtime_payload.question)
-    if question_type == "data_query":
-        response = _handle_data_query_question(runtime_payload, settings.llm_model)
-    elif question_type == "mixed":
-        response = _handle_mixed_question(runtime_payload, settings.llm_model)
-    elif question_type == "fault_analysis":
-        response = _handle_fault_analysis_question(runtime_payload, settings.llm_model)
-    else:
-        response = _handle_knowledge_question(runtime_payload, settings.llm_model)
-
-    response.session_id = session.session_id
-    save_assistant_message(session.session_id, response, effective_context)
-    update_session_state(session.session_id, payload.question, response, effective_context)
-    return response
+        response.session_id = session.session_id
+        save_assistant_message(session.session_id, response, effective_context)
+        update_session_state(session.session_id, payload.question, response, effective_context)
+        return response
+    except Exception as exc:  # noqa: BLE001
+        error_message = f"本轮 AI 问答调用失败：{type(exc).__name__}: {exc}"
+        save_error_message(session.session_id, error_message, effective_context)
+        update_session_failure_state(
+            session.session_id,
+            payload.question,
+            error_message,
+            effective_context,
+        )
+        raise

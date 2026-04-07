@@ -350,3 +350,73 @@ def update_session_state(
                 "updated_at": get_taipei_now(),
             },
         )
+
+
+def save_error_message(session_id: str, error_message: str, context: AIQAContext | None) -> None:
+    """保存失败态 assistant 消息，便于排查会话中断原因。"""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO ai_qa_messages (
+                    message_id,
+                    session_id,
+                    role,
+                    question_type,
+                    content,
+                    context_json,
+                    references_json,
+                    used_tools_json,
+                    suggested_actions_json,
+                    created_at
+                ) VALUES (
+                    :message_id,
+                    :session_id,
+                    'assistant',
+                    'error',
+                    :content,
+                    CAST(:context_json AS jsonb),
+                    '{}'::jsonb,
+                    '[]'::jsonb,
+                    '[]'::jsonb,
+                    :created_at
+                )
+                """
+            ),
+            {
+                "message_id": _generate_message_id(),
+                "session_id": session_id,
+                "content": error_message,
+                "context_json": json.dumps(_context_to_dict(context), ensure_ascii=False),
+                "created_at": get_taipei_now(),
+            },
+        )
+
+
+def update_session_failure_state(
+    session_id: str,
+    latest_question: str,
+    error_message: str,
+    context: AIQAContext | None,
+) -> None:
+    """在下游失败时仍更新会话标题与失败状态，避免留下半截 session。"""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE ai_qa_sessions
+                SET
+                    title = COALESCE(title, :title),
+                    sticky_context_json = CAST(:sticky_context_json AS jsonb),
+                    last_question_type = 'error',
+                    updated_at = :updated_at
+                WHERE session_id = :session_id
+                """
+            ),
+            {
+                "session_id": session_id,
+                "title": _build_session_title(latest_question),
+                "sticky_context_json": json.dumps(_context_to_dict(context), ensure_ascii=False),
+                "updated_at": get_taipei_now(),
+            },
+        )
