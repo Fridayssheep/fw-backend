@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from uuid import uuid4
 
@@ -65,7 +65,7 @@ def submit_anomaly_feedback(payload: AnomalyFeedbackRequest) -> AnomalyFeedbackR
     feedback_id = str(uuid4())
     created_at = get_taipei_now()
 
-    insert_feedback_sql = text(
+    upsert_feedback_sql = text(
         """
         INSERT INTO ai_anomaly_feedback (
             feedback_id,
@@ -98,6 +98,15 @@ def submit_anomaly_feedback(payload: AnomalyFeedbackRequest) -> AnomalyFeedbackR
             :model_name,
             :analysis_mode
         )
+        ON CONFLICT (analysis_id) DO UPDATE SET
+            selected_cause_id = EXCLUDED.selected_cause_id,
+            selected_score = EXCLUDED.selected_score,
+            resolution_status = EXCLUDED.resolution_status,
+            comment = EXCLUDED.comment,
+            operator_id = EXCLUDED.operator_id,
+            operator_name = EXCLUDED.operator_name,
+            updated_at = NOW()
+        RETURNING feedback_id::text
         """
     )
     insert_candidate_sql = text(
@@ -119,8 +128,8 @@ def submit_anomaly_feedback(payload: AnomalyFeedbackRequest) -> AnomalyFeedbackR
 
     try:
         with engine.begin() as connection:
-            connection.execute(
-                insert_feedback_sql,
+            row = connection.execute(
+                upsert_feedback_sql,
                 {
                     'feedback_id': feedback_id,
                     'analysis_id': payload.analysis_id,
@@ -137,7 +146,9 @@ def submit_anomaly_feedback(payload: AnomalyFeedbackRequest) -> AnomalyFeedbackR
                     'model_name': payload.model_name,
                     'analysis_mode': payload.analysis_mode,
                 },
-            )
+            ).fetchone()
+            # UPSERT 场景下使用数据库返回的实际 feedback_id（可能是已有行的）
+            feedback_id = row[0] if row else feedback_id
             for item in candidate_feedbacks:
                 connection.execute(
                     insert_candidate_sql,

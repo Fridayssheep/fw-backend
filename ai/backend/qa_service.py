@@ -982,7 +982,7 @@ def ask_ai_question(payload: AIQARequest) -> AIQAResponse:
         update_session_state(session.session_id, payload.question, response, effective_context)
         return response
     except Exception as exc:  # noqa: BLE001
-        error_message = f"本轮 AI 问答调用失败：{type(exc).__name__}: {exc}"
+        error_message = f"调用工具失败：{type(exc).__name__}: {exc}"
         save_error_message(session.session_id, error_message, effective_context)
         update_session_failure_state(
             session.session_id,
