@@ -426,6 +426,7 @@ class AIQAMeta(BaseModel):
 
 
 class AIQAResponse(BaseModel):
+    session_id: str = Field(..., description="应用层 AI 会话 ID")
     answer: str = Field(..., description="AI 的回答")
     question_type: str = Field(..., description="识别后的问题类型")
     references: AIQAReferences = Field(default_factory=AIQAReferences, description="统一证据引用")

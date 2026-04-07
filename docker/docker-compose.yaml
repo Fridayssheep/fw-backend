@@ -13,6 +13,7 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ../dataprocess/anomaly_events.sql:/docker-entrypoint-initdb.d/01-anomaly_events.sql:ro
       - ../ai/ai_anomaly_feedback.sql:/docker-entrypoint-initdb.d/02-ai_anomaly_feedback.sql:ro
+      - ../ai/ai_qa_sessions.sql:/docker-entrypoint-initdb.d/03-ai_qa_sessions.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d building_energy"]
       interval: 10s

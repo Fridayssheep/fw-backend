@@ -21,6 +21,13 @@ from .knowledge import answer_with_domain_knowledge
 from .knowledge import build_compact_knowledge_items
 from .knowledge import search_domain_knowledge_references
 from .llm_client import OpenAICompatibleClient
+from .qa_session_service import build_effective_context
+from .qa_session_service import get_or_create_session
+from .qa_session_service import load_recent_messages
+from .qa_session_service import rewrite_followup_question
+from .qa_session_service import save_assistant_message
+from .qa_session_service import save_user_message
+from .qa_session_service import update_session_state
 from .query_assistant_service import build_query_intent
 
 
@@ -497,6 +504,7 @@ def _handle_knowledge_question(payload: AIQARequest, settings_model: str) -> AIQ
 
     stage_timings_ms["total_ms"] = _duration_ms(total_start)
     return AIQAResponse(
+        session_id="",
         answer=answer,
         question_type="knowledge",
         references=references,
@@ -536,6 +544,7 @@ def _handle_data_query_question(payload: AIQARequest, settings_model: str) -> AI
     )
     stage_timings_ms["total_ms"] = _duration_ms(total_start)
     return AIQAResponse(
+        session_id="",
         answer=answer,
         question_type="data_query",
         references=references,
@@ -556,6 +565,7 @@ def _handle_fault_analysis_question(payload: AIQARequest, settings_model: str) -
             "total_ms": _duration_ms(total_start),
         }
         return AIQAResponse(
+            session_id="",
             answer=(
                 "这个问题更像异常/故障分析，但当前缺少必要上下文。"
                 "请至少提供 building_id、meter 和 time_range，或从异常详情页带着上下文发起提问。"
@@ -597,6 +607,7 @@ def _handle_fault_analysis_question(payload: AIQARequest, settings_model: str) -
     ]
     stage_timings_ms["total_ms"] = _duration_ms(total_start)
     return AIQAResponse(
+        session_id="",
         answer=anomaly_result.answer,
         question_type="fault_analysis",
         references=references,
@@ -660,6 +671,7 @@ def _handle_mixed_question(payload: AIQARequest, settings_model: str) -> AIQARes
     stage_timings_ms["mixed_synthesis_ms"] = _duration_ms(mixed_synthesis_start)
     stage_timings_ms["total_ms"] = _duration_ms(total_start)
     return AIQAResponse(
+        session_id="",
         answer=answer,
         question_type="mixed",
         references=references,
@@ -680,12 +692,29 @@ def ask_ai_question(payload: AIQARequest) -> AIQAResponse:
     """
 
     settings = get_ai_settings()
-    question_type = _classify_question_type(payload.question)
+    session = get_or_create_session(payload.session_id, payload.context)
+    recent_messages = load_recent_messages(session.session_id)
+    effective_context = build_effective_context(session, payload.context, recent_messages)
+    rewritten_question = rewrite_followup_question(payload.question, effective_context, recent_messages)
 
+    runtime_payload = AIQARequest(
+        question=rewritten_question,
+        session_id=session.session_id,
+        context=effective_context,
+    )
+    save_user_message(session.session_id, payload.question, effective_context)
+
+    question_type = _classify_question_type(runtime_payload.question)
     if question_type == "data_query":
-        return _handle_data_query_question(payload, settings.llm_model)
-    if question_type == "mixed":
-        return _handle_mixed_question(payload, settings.llm_model)
-    if question_type == "fault_analysis":
-        return _handle_fault_analysis_question(payload, settings.llm_model)
-    return _handle_knowledge_question(payload, settings.llm_model)
+        response = _handle_data_query_question(runtime_payload, settings.llm_model)
+    elif question_type == "mixed":
+        response = _handle_mixed_question(runtime_payload, settings.llm_model)
+    elif question_type == "fault_analysis":
+        response = _handle_fault_analysis_question(runtime_payload, settings.llm_model)
+    else:
+        response = _handle_knowledge_question(runtime_payload, settings.llm_model)
+
+    response.session_id = session.session_id
+    save_assistant_message(session.session_id, response, effective_context)
+    update_session_state(session.session_id, payload.question, response, effective_context)
+    return response
