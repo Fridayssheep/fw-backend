@@ -22,6 +22,10 @@ app = FastAPI(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    import asyncio
+    from app.core.events import set_main_loop
+    set_main_loop(asyncio.get_running_loop())
+
     from app.core.init_db import init_database
     init_database()
 

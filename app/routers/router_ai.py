@@ -1,5 +1,8 @@
-﻿from fastapi import APIRouter
+
+from fastapi import APIRouter
 from fastapi import HTTPException
+from fastapi import Request
+from fastapi.responses import StreamingResponse
 
 from ai.backend.anomaly_service import analyze_anomaly_with_ai
 from ai.backend.feedback_service import submit_anomaly_feedback
@@ -27,14 +30,35 @@ from app.schemas.schemas_ai import AIReportSummaryResponse
 from app.schemas.schemas_ai import AnomalyFeedbackRequest
 from app.schemas.schemas_ai import AnomalyFeedbackResponse
 
+from app.core.events import broker
+
 
 router = APIRouter(tags=["AI"])
+
+
+@router.get("/ai/status", summary="旁路状态推流 (SSE)")
+async def ai_status_stream_api(request: Request):
+    """
+    让前端在请求耗时接口前，建立此 EventSource 的单向监听。
+    后端会在调用底层各种工具时自动向此流推送状态更新。
+    """
+    async def event_generator():
+        q = broker.add_client()
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                data = await q.get()
+                yield f"data: {data}\n\n"
+        finally:
+            broker.remove_client(q)
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # ============================================================================
 # AI 异常分析接口
 # ============================================================================
-
 
 @router.post("/ai/analyze-anomaly", response_model=AIAnalyzeAnomalyResponse, summary="AI anomaly analysis")
 def analyze_anomaly_api(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomalyResponse:

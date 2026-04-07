@@ -17,6 +17,7 @@ from ai.mcp.utils import (
     _validate_choice,
     _validate_positive_int
 )
+from app.core.events import broker
 from ai.mcp.client import _request_backend
 from ai.mcp.formatters import (
     _build_tool_result,
@@ -49,6 +50,7 @@ def backend_health() -> dict[str, Any]:
     检查后端 API 服务和数据库连接状态。建议在调用其他能耗工具前先执行一次，
     快速确认服务与数据库是否可用。该工具返回服务状态、数据库状态和时间戳。
     """
+    broker.publish_sync("验证系统服务与数据库...", "backend_health")
     response = _request_backend("GET", "/health")
     return _build_tool_result(
         tool_name="backend_health",
@@ -82,6 +84,7 @@ def energy_query(
     按指定时间范围、粒度（小时/天/周/月）和聚合方式（sum/avg/max/min）
     查询一个或多个建筑的能耗数据，支持分页查询。常用于趋势分析、对标比较、异常诊断等场景。
     """
+    broker.publish_sync(f"查询指定的能耗数据报表...", "energy_query")
     normalized_building_ids = _validate_building_ids(building_ids, min_count=1)
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -126,6 +129,7 @@ def energy_trend(
     返回指定时间范围内的能耗趋势，用于观察能耗变化规律、季节性特征或长期发展趋势。
     通常用于仪表板可视化、基线对标、运营决策支持等。
     """
+    broker.publish_sync(f"拉取能耗演变的历史趋势数据...", "energy_trend")
     normalized_building_ids = _validate_building_ids(building_ids, min_count=1)
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -163,6 +167,7 @@ def energy_compare(
     对比两个或多个建筑在同一表计类型、同一时间范围下的能耗表现（如总耗量、平均值、峰值等），
     通常用于建筑间的性能基准对标、识别低效能建筑、或制定节能改进计划。
     """
+    broker.publish_sync("进行多对象或多建筑的横向能耗对标...", "energy_compare")
     normalized_building_ids = _validate_building_ids(building_ids, min_count=2)
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -200,6 +205,7 @@ def energy_rankings(
     按照指定的时间窗口和指标（总耗量、平均值、峰值等），返回所有建筑的能耗排行。
     支持降序（从高到低）或升序（从低到高）排序，用于快速识别高耗能或低耗能的建筑。
     """
+    broker.publish_sync("生成按指标排序的建筑能耗榜...", "energy_rankings")
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
     normalized_metric = _validate_choice("metric", metric, ALLOWED_RANKING_METRICS) or "sum"
@@ -238,6 +244,7 @@ def energy_cop_demo(
     基于历史能耗数据和模型，对指定建筑在特定时间范围内的制冷/制热效率（COP）进行估算。
     COP 越高表示能效越好，该工具用于评估建筑空调系统的运行效率。
     """
+    broker.publish_sync("估算 HVAC 系统性能系数(COP)...", "energy_cop_demo")
     normalized_building_id = _validate_building_ids([building_id], min_count=1)[0]
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
     normalized_granularity = _validate_choice("granularity", granularity, ALLOWED_GRANULARITIES)
@@ -271,6 +278,7 @@ def energy_weather_correlation(
     识别哪些天气因素对能耗影响最大。用于理解气候驱动的能耗变化，
     以及优化空调控制策略。
     """
+    broker.publish_sync("分析气象环境参数与能耗曲线的关联性...", "energy_weather_correlation")
     normalized_building_id = _validate_building_ids([building_id], min_count=1)[0]
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -305,6 +313,7 @@ def energy_anomaly_analysis(
     对指定建筑和表计在给定时间窗口内执行离线异常事件分析，
     返回检测到的异常事件、检测器分布、统计摘要和天气上下文等信息。
     """
+    broker.publish_sync("提取离线异常检测事件以进行故障根因诊断...", "energy_anomaly_analysis")
     normalized_building_id = _validate_building_ids([building_id], min_count=1)[0]
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -338,6 +347,7 @@ def search_domain_knowledge(query: str, top_k: int = 3) -> dict[str, Any]:
     返回结构化的知识片段和文档聚合信息。该工具只负责检索证据，不负责生成最终回答，
     适合让上层模型按需调用，再自行决定是否基于这些证据继续作答。
     """
+    broker.publish_sync(f"查询运维规则指引...", "search_domain_knowledge")
     normalized_query = query.strip()
     if not normalized_query:
         raise ValueError("query 不能为空字符串。")
@@ -361,7 +371,7 @@ def answer_with_domain_knowledge(question: str, top_k: int = 3) -> dict[str, Any
     由于 chats_openai 的结构化引用不够稳定，这个工具适合“快速拿答案”，
     但如果上层模型还需要稳定证据链，仍建议同时调用 `search_domain_knowledge`。
     """
-
+    broker.publish_sync("调用RAGFlow内置模型检索...", "answer_with_domain_knowledge")
     normalized_question = question.strip()
     if not normalized_question:
         raise ValueError("question 不能为空字符串。")
