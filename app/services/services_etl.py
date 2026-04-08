@@ -8,7 +8,6 @@ import pandas as pd
 from sqlalchemy import text
 
 from app.core.database import engine
-from app.jobs.offline_anomaly_detector import run_batch_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +95,6 @@ def process_raw_meter_upload(meter_type: str, file_path: str) -> None:
         
         cost = time.time() - start_time
         logger.info(f"[{meter_type}] 表计入库全部完成: 耗时: {cost:.2f} s")
-        
-        # 5. 自动唤醒分析引擎进行健康巡检
-        logger.info(f"触发 {meter_type} 的后台离线异常巡检...")
-        run_batch_pipeline()
-        logger.info(f"[{meter_type}] 算法排障闭环完毕！")
         
     finally:
         if os.path.exists(file_path):

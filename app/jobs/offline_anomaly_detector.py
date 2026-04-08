@@ -7,6 +7,12 @@ from sklearn.ensemble import IsolationForest
 import warnings
 warnings.filterwarnings('ignore') 
 
+try:
+    from app.core.events import broker
+except ImportError:
+    # 允许此脚本被单独剥离运行
+    broker = None 
+
 DB_USER = os.getenv("DB_USER", "admin")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "adminpassword")
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
@@ -41,7 +47,10 @@ def get_target_tasks(limit=None):
 
 def detect_anomalies_for_series(building_id, meter, last_analyzed_time):
     """处理单个建筑的单个传感器数据序列，挖掘异常事件（增量模式）"""
-    print(f"\n[{time.strftime('%H:%M:%S')}] 开始分析: 建筑 [{building_id}] | 表计 [{meter}] | 起点 [{last_analyzed_time or '全量'}]")
+    msg = f"开始分析: 建筑 [{building_id}] | 表计 [{meter}] | 起点 [{last_analyzed_time or '全量'}]"
+    print(f"\n[{time.strftime('%H:%M:%S')}] {msg}")
+    if broker:
+        broker.publish_sync(message=msg, event_type="anomaly_detect_progress")
     
     # 增量模式策略：我们需要拉取一段历史基线数据（如过去 30 天）来计算 Z-Score 和训练孤立森林。
     # 如果 last_analyzed_time 不为空，查询过去 30 天的数据加上所有新数据。
@@ -165,11 +174,19 @@ def run_batch_pipeline():
     tasks = get_target_tasks(limit=None) 
     
     total_events = 0
-    for building_id, meter, last_analyzed_time in tasks:
+    total_tasks = len(tasks)
+    
+    for i, (building_id, meter, last_analyzed_time) in enumerate(tasks):
+        if broker:
+            broker.publish_sync(message=f"进度: {i+1}/{total_tasks}", event_type="anomaly_detect_progress")
         events = detect_anomalies_for_series(building_id, meter, last_analyzed_time)
         total_events += len(events)
         
-    print(f"\n====== 管道执行完毕，总计发现并记录了 {total_events} 条异常事件！(耗时 {time.time() - start_time:.2f}s) ======")
+    
+    final_msg = f"管道执行完毕，总计发现并记录了 {total_events} 条异常事件！(耗时 {time.time() - start_time:.2f}s)"
+    print(f"\n====== {final_msg} ======")
+    if broker:
+        broker.publish_sync(message=final_msg, event_type="anomaly_detect_complete")
 
 if __name__ == "__main__":
     run_batch_pipeline()

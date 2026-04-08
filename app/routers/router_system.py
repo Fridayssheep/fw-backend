@@ -1,11 +1,13 @@
 import os
 import shutil
-from fastapi import APIRouter, BackgroundTasks, UploadFile, File, Form  # 导入 APIRouter, 后台任务和上传必要组件
+from fastapi import APIRouter, BackgroundTasks, UploadFile, File, Form, Request  # 导入 APIRouter, 后台任务和上传必要组件
+from fastapi.responses import StreamingResponse
 
 from app.schemas.schemas_system import SystemHealth  # 导入健康检查响应模型。
 from app.services.services_system import get_system_health as get_system_health_service  # 导入 system 领域的健康检查业务函数。
 from app.jobs.offline_anomaly_detector import run_batch_pipeline
 from app.services.services_etl import process_metadata_upload, process_weather_upload, process_raw_meter_upload
+from app.core.events import broker
 
 
 router = APIRouter(tags=["System"])  # 创建 system 分组路由对象，并统一设置文档标签。
@@ -16,17 +18,37 @@ def get_system_health_api() -> SystemHealth:  # 定义健康检查接口处理�
     return get_system_health_service()  # 调用 system 业务层并返回结果。
 
 
-@router.post("/trigger-anomaly-detection", summary="触发后台离线异常跑批任务")
+@router.get("/dataset/anomaly-progress-stream", summary="离线跑批进度推流 (SSE)")
+async def anomaly_progress_stream_api(request: Request):
+    """
+    提供给前端用来监听离线跑批进度的接口。
+    前端可以通过 EventSource 收到实时的进度推送和当前分析的大楼编号。
+    """
+    async def event_generator():
+        q = broker.add_client()
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                data = await q.get()
+                yield f"data: {data}\n\n"
+        finally:
+            broker.remove_client(q)
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/dataset/trigger-detection", summary="手动触发后台离线异常跑批任务")
 def trigger_anomaly_detection_api(background_tasks: BackgroundTasks) -> dict[str, str]:
     """触发后台并行离线异常跑批诊断任务，该接口立即返回，由 FastAPI 背景任务在后台执行。"""
     background_tasks.add_task(run_batch_pipeline)
-    return {"status": "ok", "message": "异常检测任务已放入队列并在后台并发执行，稍后系统会自动刷新或挂载新的异常告警。"}
+    return {"status": "ok", "message": "异常检测任务已加入队列并在后台并发执行。"}
 
 
 import tempfile
 
 def _save_upload_file_temp(upload_file: UploadFile) -> str:
-    """内部通用函数，将上传的文件临时存落磁盘以供 Pandas 读取。"""
+    """内部通用函数，将上传的文件临时存放以供 Pandas 读取。"""
     temp_dir = os.path.join(tempfile.gettempdir(), "fw-uploads")
     os.makedirs(temp_dir, exist_ok=True)
     file_path = os.path.join(temp_dir, upload_file.filename)
@@ -35,20 +57,20 @@ def _save_upload_file_temp(upload_file: UploadFile) -> str:
     return file_path
 
 
-@router.post("/dataset/upload/metadata", summary="上传并覆写建筑资产元数据")
+@router.post("/dataset/upload/metadata", summary="上传并覆写建筑元数据")
 def upload_metadata_api(background_tasks: BackgroundTasks, file: UploadFile = File(...)) -> dict[str, str]:
     """接收 CSV 文件并覆写建筑基础信息（不会破坏已有表计流结构）。该接口不阻塞前台请求。"""
     tmp_path = _save_upload_file_temp(file)
     background_tasks.add_task(process_metadata_upload, tmp_path)
-    return {"status": "ok", "message": "元数据已接收，正在后台安全覆写..."}
+    return {"status": "ok", "message": "上传元数据成功，开始处理建筑元数据..."}
 
 
-@router.post("/dataset/upload/weather", summary="上传覆盖本区域气象快照")
+@router.post("/dataset/upload/weather", summary="上传覆盖本区域天气数据")
 def upload_weather_api(background_tasks: BackgroundTasks, file: UploadFile = File(...)) -> dict[str, str]:
     """接收 CSV 文件并覆盖天气数据仓库（独立于基建及能耗线）。该接口不阻塞前台。"""
     tmp_path = _save_upload_file_temp(file)
     background_tasks.add_task(process_weather_upload, tmp_path)
-    return {"status": "ok", "message": "气象站数据已接收，正在后台安全同步..."}
+    return {"status": "ok", "message": "上传天气数据成功，开始处理天气数据..."}
 
 
 @router.post("/dataset/upload/raw/{meter_type}", summary="单点上传覆盖/追加表计流水")

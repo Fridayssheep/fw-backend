@@ -21,13 +21,13 @@ class StreamBroker:
         if q in self.clients:
             self.clients.remove(q)
             
-    def publish_sync(self, message: str, context: str = "") -> None:
-        """从同步线程（如 MCP 各种 tool 中）发起状态广播。"""
+    def publish_sync(self, message: str, context: str = "", event_type: str = "mcp_tool") -> None:
+        """从同步线程发起状态广播。默认保留用于 mcp_tool 等其他场景，可通过 event_type 定制格式。"""
         global _MAIN_LOOP
         if not _MAIN_LOOP:
             return
             
-        data = json.dumps({"action": "mcp_tool", "message": message, "context": context}, ensure_ascii=False)
+        data = json.dumps({"action": event_type, "message": message, "context": context}, ensure_ascii=False)
         
         def _put() -> None:
             for q in list(self.clients):
