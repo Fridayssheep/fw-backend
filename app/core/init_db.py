@@ -22,10 +22,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # 需要按顺序执行的建表 SQL 文件
 _SQL_FILES: list[Path] = [
-    _PROJECT_ROOT / "dataprocess" / "anomaly_events.sql",
-    _PROJECT_ROOT / "ai" / "ai_anomaly_feedback.sql",
-    _PROJECT_ROOT / "ai" / "ai_qa_sessions.sql",
+    _PROJECT_ROOT / "app" / "core" / "sql" / "anomaly_events.sql",
+    _PROJECT_ROOT / "app" / "core" / "sql" / "ai_anomaly_feedback.sql",
+    _PROJECT_ROOT / "app" / "core" / "sql" / "ai_qa_sessions.sql",
 ]
+
+# 需要最后执行的索引创建文件（无需放在建表事务里）
+_INDEX_FILE: Path = _PROJECT_ROOT / "app" / "core" / "sql" / "create_indexes.sql"
 
 # 历史遗留列迁移：(表名, 列名, 列定义)
 # 当 SQL 文件更新了而已有数据库 volume 未重建时，通过 ALTER TABLE 补齐
@@ -37,8 +40,8 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
 
 def init_database() -> None:
     """在应用启动时执行幂等的 schema 初始化。"""
+    # 1. 执行所有的表结构和补齐
     with engine.begin() as conn:
-        # 1. 执行所有建表 SQL
         for sql_file in _SQL_FILES:
             if not sql_file.exists():
                 logger.warning("Schema SQL file not found, skipping: %s", sql_file)
@@ -48,12 +51,18 @@ def init_database() -> None:
                 conn.execute(text(statement))
             logger.info("Executed schema file: %s", sql_file.name)
 
-        # 2. 补齐可能缺失的列
         for table, column, col_type in _COLUMN_MIGRATIONS:
-            conn.execute(text(
-                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}"
-            ))
-        logger.info("Database schema initialization complete.")
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}"))
+
+    # 2. 执行所有的索引构建（使用 AUTOCOMMIT 避免事务冲突报错）
+    if _INDEX_FILE.exists():
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            sql_content = _INDEX_FILE.read_text(encoding="utf-8")
+            for statement in _split_sql_statements(sql_content):
+                conn.execute(text(statement))
+            logger.info("Executed index schema file: %s", _INDEX_FILE.name)
+
+    logger.info("Database schema and indexes initialization complete.")
 
 
 def _split_sql_statements(sql_content: str) -> list[str]:

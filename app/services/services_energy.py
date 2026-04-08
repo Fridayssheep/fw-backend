@@ -53,6 +53,7 @@ COMPARE_METRIC_SQL_MAP = {  # 定义能耗对比接口允许的指标 SQL 表达
     "average": "AVG(mr.meter_reading)",  # average 作为 avg 的兼容别名。
     "peak": "MAX(mr.meter_reading)",  # peak 表示峰值能耗。
     "base_load": "MIN(mr.meter_reading)",  # base_load 这里用最小负荷做一个演示版近似。
+    "eui": "SUM(mr.meter_reading) / NULLIF(MAX(bm.sqm), 0)",  # eui 为算总能耗除以建筑面积。
 }  # 结束对比指标映射定义。
 
 
@@ -62,6 +63,7 @@ RANKING_METRIC_SQL_MAP = {  # 定义能耗排行接口允许的指标 SQL 表达
     "avg": "AVG(mr.meter_reading)",  # avg 表示平均能耗。
     "average": "AVG(mr.meter_reading)",  # average 作为 avg 的兼容别名。
     "peak": "MAX(mr.meter_reading)",  # peak 表示峰值能耗。
+    "eui": "SUM(mr.meter_reading) / NULLIF(MAX(bm.sqm), 0)",  # eui 为算总能耗除以建筑面积。
 }  # 结束排行指标映射定义。
 
 
@@ -377,7 +379,7 @@ def get_energy_compare(  # 定义能耗对比接口业务函数。
             building_id=str(current_building_id),  # 写入当前建筑编号字段。
             metric=normalized_metric,  # 写入对比指标字段。
             value=row_value_map.get(str(current_building_id), 0.0),  # 如果当前建筑没有命中数据，就用 0 兜底。
-            unit=get_meter_unit(normalized_meter),  # 写入单位字段。
+            unit=f"{get_meter_unit(normalized_meter)}/m²" if normalized_metric == "eui" else get_meter_unit(normalized_meter),  # 动态生成EUI单位。
         )  # 完成当前对比项对象创建。
         for current_building_id in effective_building_ids  # 遍历最终生效的建筑列表。
     ]  # 完成对比结果列表创建。
@@ -404,11 +406,12 @@ def get_energy_rankings(  # 定义能耗排行接口业务函数。
             mr.building_id AS building_id,
             {metric_sql} AS value
         FROM meter_readings mr
+        LEFT JOIN building_metadata bm ON mr.building_id = bm.building_id
         WHERE mr.meter = :meter
           AND mr.timestamp >= :start_time
           AND mr.timestamp <= :end_time
         GROUP BY mr.building_id
-        ORDER BY value {normalized_order}
+        ORDER BY value {normalized_order} NULLS LAST
         LIMIT :limit
         """,
         {"meter": normalized_meter, "start_time": resolved_start, "end_time": resolved_end, "limit": safe_limit},
@@ -420,7 +423,7 @@ def get_energy_rankings(  # 定义能耗排行接口业务函数。
                 rank=index,  # 写入排名字段。
                 building_id=str(row["building_id"]),  # 写入建筑编号字段。
                 value=round(float(row["value"] or 0), 4),  # 写入排行值字段。
-                unit=get_meter_unit(normalized_meter),  # 写入单位字段。
+                unit=f"{get_meter_unit(normalized_meter)}/m²" if normalized_metric == "eui" else get_meter_unit(normalized_meter),  # 动态生成EUI单位。
             )  # 完成排行项对象创建。
         )  # 完成当前排行项追加。
     return EnergyRankingResponse(items=ranking_items)  # 返回完整排行响应。
