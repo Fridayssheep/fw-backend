@@ -1,3 +1,4 @@
+import asyncio
 
 from fastapi import APIRouter
 from fastapi import HTTPException
@@ -34,9 +35,6 @@ from app.core.events import broker
 
 
 router = APIRouter(tags=["AI"])
-
-
-import asyncio
 
 @router.get("/ai/status", summary="旁路状态推流 (SSE)")
 async def ai_status_stream_api(request: Request):

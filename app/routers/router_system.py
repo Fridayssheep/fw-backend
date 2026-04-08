@@ -1,6 +1,9 @@
+import asyncio
 import os
 import shutil
-from fastapi import APIRouter, BackgroundTasks, UploadFile, File, Form, Request  # 导入 APIRouter, 后台任务和上传必要组件
+import tempfile
+
+from fastapi import APIRouter, BackgroundTasks, UploadFile, File, Request  # 导入 APIRouter, 后台任务和上传必要组件
 from fastapi.responses import StreamingResponse
 
 from app.schemas.schemas_system import SystemHealth  # 导入健康检查响应模型。
@@ -16,9 +19,6 @@ router = APIRouter(tags=["System"])  # 创建 system 分组路由对象，并统
 @router.get("/health", response_model=SystemHealth, summary="服务健康检查")  # 注册 system 健康检查接口。
 def get_system_health_api() -> SystemHealth:  # 定义健康检查接口处理函数。
     return get_system_health_service()  # 调用 system 业务层并返回结果。
-
-
-import asyncio
 
 @router.get("/dataset/anomaly-progress-stream", summary="离线跑批进度推流 (SSE)")
 async def anomaly_progress_stream_api(request: Request):
@@ -48,9 +48,6 @@ def trigger_anomaly_detection_api(background_tasks: BackgroundTasks) -> dict[str
     """触发后台并行离线异常跑批诊断任务，该接口立即返回，由 FastAPI 背景任务在后台执行。"""
     background_tasks.add_task(run_batch_pipeline)
     return {"status": "ok", "message": "异常检测任务已加入队列并在后台并发执行。"}
-
-
-import tempfile
 
 def _save_upload_file_temp(upload_file: UploadFile) -> str:
     """内部通用函数，将上传的文件临时存放以供 Pandas 读取。"""

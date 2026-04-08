@@ -184,7 +184,7 @@ def run_batch_pipeline():
         
     
     final_msg = f"管道执行完毕，总计发现并记录了 {total_events} 条异常事件！(耗时 {time.time() - start_time:.2f}s)"
-    print(f"\n====== {final_msg} ======")
+    print("\n====== " + final_msg + " ======")
     if broker:
         broker.publish_sync(message=final_msg, event_type="anomaly_detect_complete")
 

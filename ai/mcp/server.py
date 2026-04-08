@@ -84,7 +84,7 @@ def energy_query(
     按指定时间范围、粒度（小时/天/周/月）和聚合方式（sum/avg/max/min）
     查询一个或多个建筑的能耗数据，支持分页查询。常用于趋势分析、对标比较、异常诊断等场景。
     """
-    broker.publish_sync(f"查询指定的能耗数据报表...", "energy_query")
+    broker.publish_sync("查询指定的能耗数据报表...", "energy_query")
     normalized_building_ids = _validate_building_ids(building_ids, min_count=1)
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -129,7 +129,7 @@ def energy_trend(
     返回指定时间范围内的能耗趋势，用于观察能耗变化规律、季节性特征或长期发展趋势。
     通常用于仪表板可视化、基线对标、运营决策支持等。
     """
-    broker.publish_sync(f"拉取能耗演变的历史趋势数据...", "energy_trend")
+    broker.publish_sync("拉取能耗演变的历史趋势数据...", "energy_trend")
     normalized_building_ids = _validate_building_ids(building_ids, min_count=1)
     normalized_meter = _validate_meter(meter)
     normalized_start, normalized_end = _validate_time_range(start_time, end_time)
@@ -347,7 +347,7 @@ def search_domain_knowledge(query: str, top_k: int = 3) -> dict[str, Any]:
     返回结构化的知识片段和文档聚合信息。该工具只负责检索证据，不负责生成最终回答，
     适合让上层模型按需调用，再自行决定是否基于这些证据继续作答。
     """
-    broker.publish_sync(f"查询运维规则指引...", "search_domain_knowledge")
+    broker.publish_sync("查询运维规则指引...", "search_domain_knowledge")
     normalized_query = query.strip()
     if not normalized_query:
         raise ValueError("query 不能为空字符串。")

@@ -1,4 +1,3 @@
-import math
 from datetime import datetime
 from datetime import timedelta
 from typing import Any
@@ -11,8 +10,6 @@ from app.schemas.schemas_common import Pagination
 from app.schemas.schemas_meters import MaintenanceRecord
 from app.schemas.schemas_meters import MaintenanceRecordListResponse
 from app.schemas.schemas_meters import Meter
-from app.schemas.schemas_meters import MeterAlarm, MeterAlarmLevel, MeterAlarmStatus
-from app.schemas.schemas_meters import MeterAlarmListResponse
 from app.schemas.schemas_meters import MeterDetailResponse
 from app.schemas.schemas_meters import MeterListResponse
 from app.schemas.schemas_meters import MeterStatus

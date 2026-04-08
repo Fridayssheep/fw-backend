@@ -3,7 +3,6 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any
 
-from app.schemas import AIActionItem
 from app.schemas import AIAnalyzeAnomalyRequest
 from app.schemas import AIReportSummaryAction
 from app.schemas import AIReportSummaryEvidence
