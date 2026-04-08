@@ -1,8 +1,10 @@
 ﻿from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
+from app.core.events import broker
 from app.schemas import AIActionItem
 from app.schemas import AIAnalyzeAnomalyMeta
 from app.schemas import AIAnalyzeAnomalyRequest
@@ -31,6 +33,14 @@ from .prompting import build_analyze_anomaly_prompts
 #   3. 调用 LLM 进行根因诊断和结构化分析
 #   4. 提供 fallback 机制确保服务可用性
 # ============================================================================
+
+
+def _duration_ms(start_time: float) -> int:
+    return int((perf_counter() - start_time) * 1000)
+
+
+def _publish_status(message: str, context: str) -> None:
+    broker.publish_sync(message=message, context=context, event_type="ai_status")
 
 
 def _detector_counts(anomaly_result: Any) -> dict[str, int]:
@@ -423,6 +433,7 @@ def _build_fallback_response(
     history_context: list[dict[str, Any]],
     settings_model: str,
     allowed_action_targets: tuple[str, ...],
+    stage_timings_ms: dict[str, int],
 ) -> AIAnalyzeAnomalyResponse:
     """在 LLM 不可用或输出非法时，构造可落地的兜底响应。"""
     analysis_id = _build_analysis_id()
@@ -461,6 +472,7 @@ def _build_fallback_response(
             history_feedback_hits=len(history_context),
             offline_context_used=True,
             used_fallback=True,
+            stage_timings_ms=stage_timings_ms,
         ),
     )
 
@@ -474,6 +486,7 @@ def _normalize_llm_response(
     history_context: list[dict[str, Any]],
     settings_model: str,
     allowed_action_targets: tuple[str, ...],
+    stage_timings_ms: dict[str, int],
 ) -> AIAnalyzeAnomalyResponse:
     """将 LLM 原始 JSON 归一化为后端响应模型。"""
     analysis_id = _build_analysis_id()
@@ -515,6 +528,7 @@ def _normalize_llm_response(
             history_feedback_hits=len(history_context),
             offline_context_used=True,
             used_fallback=False,
+            stage_timings_ms=stage_timings_ms,
         ),
     )
 
@@ -529,6 +543,10 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
     4. 若 LLM 失败，返回可用的 fallback 结果。
     """
 
+    total_start = perf_counter()
+    stage_timings_ms: dict[str, int] = {}
+    _publish_status("开始分析离线异常事件...", "energy_anomaly_analysis")
+
     energy_payload = EnergyAnomalyAnalysisRequest(
         building_id=payload.building_id,
         meter=payload.meter,
@@ -537,23 +555,33 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
         analysis_mode=payload.analysis_mode,
         include_weather_context=payload.include_weather_context,
     )
+    anomaly_lookup_start = perf_counter()
     anomaly_result = get_energy_anomaly_analysis(energy_payload)
+    stage_timings_ms["energy_anomaly_analysis_ms"] = _duration_ms(anomaly_lookup_start)
 
     weather_result: WeatherCorrelationResponse | None = None
     if payload.include_weather_context:
+        _publish_status("正在分析天气与能耗关联...", "energy_weather_correlation")
+        weather_start = perf_counter()
         weather_result = get_energy_weather_correlation(
             building_id=payload.building_id,
             meter=payload.meter,
             start_time=payload.time_range.start,
             end_time=payload.time_range.end,
         )
+        stage_timings_ms["weather_correlation_ms"] = _duration_ms(weather_start)
 
     settings = get_ai_settings()
+    _publish_status("正在检索相关运维知识...", "search_domain_knowledge")
+    knowledge_start = perf_counter()
     knowledge_context = (
         retrieve_anomaly_knowledge(payload.meter, anomaly_result.summary, payload.question)
         if settings.ai_enable_knowledge
         else []
     )
+    stage_timings_ms["knowledge_lookup_ms"] = _duration_ms(knowledge_start)
+    _publish_status("正在检索历史处理记录...", "retrieve_similar_feedback_cases")
+    history_start = perf_counter()
     history_context = (
         retrieve_similar_feedback_cases(
             building_id=payload.building_id,
@@ -564,8 +592,10 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
         if settings.ai_enable_history
         else []
     )
+    stage_timings_ms["history_lookup_ms"] = _duration_ms(history_start)
 
     try:
+        _publish_status("正在生成异常诊断结论...", "llm_generate")
         system_prompt, user_prompt = build_analyze_anomaly_prompts(
             request=payload,
             anomaly_result=anomaly_result,
@@ -574,7 +604,11 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
             history_context=history_context,
             allowed_action_targets=settings.ai_allowed_action_targets,
         )
+        llm_start = perf_counter()
         llm_response = OpenAICompatibleClient(settings).generate_json(system_prompt=system_prompt, user_prompt=user_prompt)
+        stage_timings_ms["llm_generate_ms"] = _duration_ms(llm_start)
+        stage_timings_ms["total_ms"] = _duration_ms(total_start)
+        _publish_status("异常分析完成。", "completed")
         return _normalize_llm_response(
             request=payload,
             llm_response=llm_response,
@@ -584,9 +618,12 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
             history_context=history_context,
             settings_model=settings.llm_model,
             allowed_action_targets=settings.ai_allowed_action_targets,
+            stage_timings_ms=stage_timings_ms,
         )
     except Exception:
         # Keep the route usable even before the model side is fully stable.
+        stage_timings_ms["total_ms"] = _duration_ms(total_start)
+        _publish_status("模型生成失败，已切换到兜底诊断结果。", "fallback")
         return _build_fallback_response(
             request=payload,
             anomaly_result=anomaly_result,
@@ -594,4 +631,5 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
             history_context=history_context,
             settings_model=settings.llm_model,
             allowed_action_targets=settings.ai_allowed_action_targets,
+            stage_timings_ms=stage_timings_ms,
         )

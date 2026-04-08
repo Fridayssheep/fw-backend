@@ -24,7 +24,7 @@
 进入 `docker` 目录，将模板生成为实际的配置文件：
 ```bash
 cd docker
-cp ../.env.example .env
+cp .env.example .env
 ```
 修改`.env`文件中的数据库和LLM相关配置
 

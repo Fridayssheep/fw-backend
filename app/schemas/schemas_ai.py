@@ -53,6 +53,7 @@ class AIAnalyzeAnomalyMeta(BaseModel):
     history_feedback_hits: int = 0
     offline_context_used: bool = True
     used_fallback: bool = False
+    stage_timings_ms: dict[str, int] = Field(default_factory=dict)
 
 
 class AIAnalyzeAnomalyRequest(BaseModel):

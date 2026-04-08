@@ -54,12 +54,13 @@ def backend_http_check() -> dict[str, Any]:
     backend_base_url = get_required_env("BACKEND_BASE_URL").rstrip("/")
     question = get_required_env("AI_QA_TEST_QUESTION")
     session_id = os.getenv("AI_QA_TEST_SESSION_ID", "").strip() or None
+    timeout_seconds = float(os.getenv("AI_QA_HTTP_TIMEOUT_SECONDS", "180"))
 
     payload: dict[str, Any] = {"question": question}
     if session_id:
         payload["session_id"] = session_id
 
-    with httpx.Client(timeout=90.0, trust_env=False) as client:
+    with httpx.Client(timeout=timeout_seconds, trust_env=False) as client:
         response = client.post(f"{backend_base_url}/ai/qa", json=payload)
 
     body: dict[str, Any]
@@ -106,6 +107,7 @@ def main() -> None:
             "AI_QA_TEST_QUESTION": os.getenv("AI_QA_TEST_QUESTION", ""),
             "AI_QA_TEST_SESSION_ID": os.getenv("AI_QA_TEST_SESSION_ID", ""),
             "AI_QA_DIRECT_RAGFLOW_CHECK": os.getenv("AI_QA_DIRECT_RAGFLOW_CHECK", "1"),
+            "AI_QA_HTTP_TIMEOUT_SECONDS": os.getenv("AI_QA_HTTP_TIMEOUT_SECONDS", "180"),
         },
     }
 

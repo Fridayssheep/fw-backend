@@ -74,6 +74,27 @@ def _build_session_title(question: str) -> str:
     return normalized[:60]
 
 
+def _strip_null_chars_from_text(value: str) -> str:
+    return value.replace("\x00", "")
+
+
+def _sanitize_json_payload(value: object) -> object:
+    if isinstance(value, str):
+        return _strip_null_chars_from_text(value)
+    if isinstance(value, list):
+        return [_sanitize_json_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_json_payload(item)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _safe_json_dumps(value: object) -> str:
+    return json.dumps(_sanitize_json_payload(value), ensure_ascii=False)
+
+
 def _get_latest_user_question(recent_messages: list[QAMessageRecord]) -> str | None:
     for item in reversed(recent_messages):
         if item.role == "user" and item.content.strip():
@@ -271,8 +292,8 @@ def save_user_message(session_id: str, question: str, context: AIQAContext | Non
             {
                 "message_id": _generate_message_id(),
                 "session_id": session_id,
-                "content": question,
-                "context_json": json.dumps(_context_to_dict(context), ensure_ascii=False),
+                "content": _strip_null_chars_from_text(question),
+                "context_json": _safe_json_dumps(_context_to_dict(context)),
                 "created_at": get_taipei_now(),
             },
         )
@@ -312,11 +333,11 @@ def save_assistant_message(session_id: str, response: AIQAResponse, context: AIQ
                 "message_id": _generate_message_id(),
                 "session_id": session_id,
                 "question_type": response.question_type,
-                "content": response.answer,
-                "context_json": json.dumps(_context_to_dict(context), ensure_ascii=False),
-                "references_json": json.dumps(response.references.model_dump(mode="json"), ensure_ascii=False),
-                "used_tools_json": json.dumps([item.model_dump(mode="json") for item in response.used_tools], ensure_ascii=False),
-                "suggested_actions_json": json.dumps([item.model_dump(mode="json") for item in response.suggested_actions], ensure_ascii=False),
+                "content": _strip_null_chars_from_text(response.answer),
+                "context_json": _safe_json_dumps(_context_to_dict(context)),
+                "references_json": _safe_json_dumps(response.references.model_dump(mode="json")),
+                "used_tools_json": _safe_json_dumps([item.model_dump(mode="json") for item in response.used_tools]),
+                "suggested_actions_json": _safe_json_dumps([item.model_dump(mode="json") for item in response.suggested_actions]),
                 "created_at": get_taipei_now(),
             },
         )
@@ -345,7 +366,7 @@ def update_session_state(
             {
                 "session_id": session_id,
                 "title": _build_session_title(latest_question),
-                "sticky_context_json": json.dumps(_context_to_dict(context), ensure_ascii=False),
+                "sticky_context_json": _safe_json_dumps(_context_to_dict(context)),
                 "last_question_type": response.question_type,
                 "updated_at": get_taipei_now(),
             },
@@ -386,8 +407,8 @@ def save_error_message(session_id: str, error_message: str, context: AIQAContext
             {
                 "message_id": _generate_message_id(),
                 "session_id": session_id,
-                "content": error_message,
-                "context_json": json.dumps(_context_to_dict(context), ensure_ascii=False),
+                "content": _strip_null_chars_from_text(error_message),
+                "context_json": _safe_json_dumps(_context_to_dict(context)),
                 "created_at": get_taipei_now(),
             },
         )
@@ -416,7 +437,7 @@ def update_session_failure_state(
             {
                 "session_id": session_id,
                 "title": _build_session_title(latest_question),
-                "sticky_context_json": json.dumps(_context_to_dict(context), ensure_ascii=False),
+                "sticky_context_json": _safe_json_dumps(_context_to_dict(context)),
                 "updated_at": get_taipei_now(),
             },
         )
