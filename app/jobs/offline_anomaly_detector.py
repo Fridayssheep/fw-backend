@@ -160,7 +160,7 @@ def detect_anomalies_for_series(building_id, meter, last_analyzed_time):
         print(f"  -> 共检出 {len(events_to_insert)} 条异常事件，准备写入数据库...")
         df_events = pd.DataFrame(events_to_insert)
         df_events.to_sql('anomaly_events', engine, if_exists='append', index=False)
-        print(f"  -> 写入完成！")
+        print("  -> 写入完成！")
     else:
         print("  -> 健康状态良好，未检出明显的长期异常。")
         
