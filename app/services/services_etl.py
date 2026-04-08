@@ -11,6 +11,23 @@ from app.core.init_db import ensure_indexes
 
 logger = logging.getLogger(__name__)
 
+_METADATA_FLOAT_COLUMNS = {
+    "sqm",
+    "sqft",
+    "lat",
+    "lng",
+    "energystarscore",
+    "eui",
+    "site_eui",
+    "source_eui",
+}
+
+_METADATA_INT_COLUMNS = {
+    "yearbuilt",
+    "numberoffloors",
+    "occupants",
+}
+
 
 def _ensure_indexes_after_upload(upload_type: str) -> None:
     # In incremental upload mode, tables may appear gradually.
@@ -22,11 +39,32 @@ def _ensure_indexes_after_upload(upload_type: str) -> None:
         logger.exception("Index ensure failed after %s upload.", upload_type)
 
 
+def _normalize_numeric_series(series: pd.Series) -> pd.Series:
+    # Metadata CSV may contain thousands separators like "1,515".
+    cleaned = series.astype("string").str.replace(",", "", regex=False).str.strip()
+    cleaned = cleaned.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "<NA>": pd.NA})
+    return pd.to_numeric(cleaned, errors="coerce")
+
+
+def _normalize_metadata_frame(df_meta: pd.DataFrame) -> pd.DataFrame:
+    for column in _METADATA_FLOAT_COLUMNS:
+        if column in df_meta.columns:
+            df_meta[column] = _normalize_numeric_series(df_meta[column])
+
+    for column in _METADATA_INT_COLUMNS:
+        if column in df_meta.columns:
+            numeric = _normalize_numeric_series(df_meta[column])
+            df_meta[column] = numeric.round().astype("Int64")
+
+    return df_meta
+
+
 def process_metadata_upload(file_path: str) -> None:
     """Import and overwrite building metadata."""
     logger.info("Start processing metadata file: %s", file_path)
     try:
         df_meta = pd.read_csv(file_path)
+        df_meta = _normalize_metadata_frame(df_meta)
 
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM building_metadata;"))

@@ -14,7 +14,6 @@ RUN pip install --no-cache-dir uv \
 
 COPY app /app/app
 COPY ai /app/ai
-COPY dataprocess /app/dataprocess
 
 EXPOSE 8000
 
