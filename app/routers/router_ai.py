@@ -36,6 +36,8 @@ from app.core.events import broker
 router = APIRouter(tags=["AI"])
 
 
+import asyncio
+
 @router.get("/ai/status", summary="旁路状态推流 (SSE)")
 async def ai_status_stream_api(request: Request):
     """
@@ -48,8 +50,12 @@ async def ai_status_stream_api(request: Request):
             while True:
                 if await request.is_disconnected():
                     break
-                data = await q.get()
-                yield f"data: {data}\n\n"
+                try:
+                    # 使用 1 秒超时打断等待，以便及时循环检测客户端断开状态
+                    data = await asyncio.wait_for(q.get(), timeout=1.0)
+                    yield f"data: {data}\n\n"
+                except asyncio.TimeoutError:
+                    continue
         finally:
             broker.remove_client(q)
             

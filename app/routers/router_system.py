@@ -18,6 +18,8 @@ def get_system_health_api() -> SystemHealth:  # 定义健康检查接口处理�
     return get_system_health_service()  # 调用 system 业务层并返回结果。
 
 
+import asyncio
+
 @router.get("/dataset/anomaly-progress-stream", summary="离线跑批进度推流 (SSE)")
 async def anomaly_progress_stream_api(request: Request):
     """
@@ -30,8 +32,11 @@ async def anomaly_progress_stream_api(request: Request):
             while True:
                 if await request.is_disconnected():
                     break
-                data = await q.get()
-                yield f"data: {data}\n\n"
+                try:
+                    data = await asyncio.wait_for(q.get(), timeout=1.0)
+                    yield f"data: {data}\n\n"
+                except asyncio.TimeoutError:
+                    continue
         finally:
             broker.remove_client(q)
             
