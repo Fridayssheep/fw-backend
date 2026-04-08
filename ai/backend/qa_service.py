@@ -300,10 +300,10 @@ def _build_data_reference_items(query_result: Any) -> list[AIReferenceItem]:
         AIReferenceItem(
             source_type="data",
             document_id=None,
-            document_name=query_result.recommended_endpoint,
+            document_name=query_result.query_plan.endpoint,
             chunk_id=None,
             snippet=_trim_text(
-                f"{query_result.summary} 参数: {query_result.recommended_query_params}",
+                f"{query_result.summary} 参数: {query_result.query_plan.params}",
                 max_length=220,
             ),
             score=None,
@@ -385,7 +385,7 @@ def _build_query_action(query_result: Any, tool_name: str | None = None) -> list
         AISuggestedAction(
             label="查看查询结果" if tool_name else "查看推荐查询",
             action_type="call_api",
-            target=tool_name or query_result.recommended_endpoint,
+            target=tool_name or query_result.query_plan.endpoint,
         )
     ]
 
@@ -545,7 +545,7 @@ def _select_data_tool(question: str, query_result: Any) -> tuple[str, str]:
     """让主模型在白名单内选择数据工具，失败时回退到 query-assistant 推荐。"""
 
     fallback_tool_name = DATA_TOOL_NAME_BY_ENDPOINT.get(
-        query_result.recommended_endpoint,
+        query_result.query_plan.endpoint,
         "energy_query",
     )
     allowed_tools = list(DATA_TOOL_NAME_BY_ENDPOINT.values())
@@ -554,9 +554,9 @@ def _select_data_tool(question: str, query_result: Any) -> tuple[str, str]:
     user_prompt = (
         f"【用户问题】\n{question}\n\n"
         f"【查询助手解析结果】\n"
-        f"recommended_endpoint={query_result.recommended_endpoint}\n"
-        f"recommended_http_method={query_result.recommended_http_method}\n"
-        f"recommended_query_params={query_result.recommended_query_params}\n"
+        f"query_plan_endpoint={query_result.query_plan.endpoint}\n"
+        f"query_plan_method={query_result.query_plan.method}\n"
+        f"query_plan_params={query_result.query_plan.params}\n"
         f"warnings={query_result.warnings}\n\n"
         f"【allowed_tools】\n{allowed_tools}\n"
     )
@@ -670,8 +670,8 @@ def _fallback_data_answer(query_result: Any, tool_result: dict[str, Any] | None 
         return f"{tool_result.get('summary') or '已执行数据查询。'} {highlights}".strip()
     warning_text = f" 注意事项：{'；'.join(query_result.warnings)}。" if query_result.warnings else ""
     return (
-        f"{query_result.summary} 建议调用 {query_result.recommended_endpoint} "
-        f"（{query_result.recommended_http_method}），推荐参数为 {query_result.recommended_query_params}。"
+        f"{query_result.summary} 建议调用 {query_result.query_plan.endpoint} "
+        f"（{query_result.query_plan.method}），推荐参数为 {query_result.query_plan.params}。"
         f"{warning_text}"
     )
 
@@ -791,7 +791,7 @@ def _handle_data_query_question(payload: AIQARequest, settings_model: str) -> AI
         )
 
         execution_start = perf_counter()
-        tool_result = _execute_data_tool(tool_name, query_result.recommended_query_params)
+        tool_result = _execute_data_tool(tool_name, query_result.query_plan.params)
         stage_timings_ms["data_tool_execution_ms"] = _duration_ms(execution_start)
 
         references = AIQAReferences(data=_build_executed_data_reference_items(tool_result))

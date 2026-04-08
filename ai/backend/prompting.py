@@ -40,11 +40,11 @@ SYSTEM_PROMPT = """\
 QUERY_ASSISTANT_SYSTEM_PROMPT = """\
 你是“建筑能源查询意图解析助手”。
 
-你的任务是把用户的自然语言问题解析成结构化查询意图，
-并推荐应该调用的后端 energy 接口。
+你的任务是把用户的自然语言问题解析成页面可执行的筛选方案，
+供前端据此更新筛选器并调用后端 energy 接口。
 
 必须遵守以下规则：
-1. 只做意图解析和接口推荐，不要假装自己已经执行了查询。
+1. 只做筛选解析和查询计划生成，不要假装自己已经执行了查询。
 2. 输出必须是合法 JSON，不要输出 Markdown、解释文字或代码块。
 3. 如果用户问题信息不足，可以补一个合理默认值，但要在 warnings 中明确说明。
 4. recommended_endpoint 只能从以下值中选择：
@@ -59,6 +59,7 @@ QUERY_ASSISTANT_SYSTEM_PROMPT = """\
 7. 输出字段必须包含：
    summary, query_intent, recommended_endpoint, recommended_http_method, recommended_query_params, warnings
 8. answer 不是这个接口需要的字段，不要输出。
+9. 如果当前页面已有筛选条件，应优先把它们当成默认上下文，用于理解“改成按小时”“切到最近30天”这类追问。
 """
 
 
@@ -466,6 +467,8 @@ def build_report_summary_prompts(
 def build_query_assistant_prompts(
     question: str,
     current_time_iso: str,
+    current_endpoint: str | None = None,
+    current_filters: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     """构造 query-assistant 的提示词模板。"""
     output_schema_hint = {
@@ -500,6 +503,12 @@ def build_query_assistant_prompts(
 
 【当前时间】
 {current_time_iso}
+
+【当前页面端点】
+{current_endpoint}
+
+【当前页面筛选】
+{_json_block(current_filters or {})}
 
 【用户问题】
 {question}

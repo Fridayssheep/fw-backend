@@ -278,15 +278,21 @@ def patched_ai_dependencies() -> Any:
     def fake_build_query_intent(payload: AIQueryAssistantRequest) -> Any:
         return SimpleNamespace(
             summary="已将问题解析为 /energy/trend 的查询意图。",
-            recommended_endpoint="/energy/trend",
-            recommended_http_method="GET",
-            recommended_query_params={
-                "building_ids": ["Bear_assembly_Angel"],
-                "meter": "electricity",
-                "start_time": "2017-01-01T00:00:00+00:00",
-                "end_time": "2017-01-07T00:00:00+00:00",
-                "granularity": "day",
-            },
+            query_plan=SimpleNamespace(
+                endpoint="/energy/trend",
+                method="GET",
+                params={
+                    "building_ids": ["Bear_assembly_Angel"],
+                    "meter": "electricity",
+                    "start_time": "2017-01-01T00:00:00+00:00",
+                    "end_time": "2017-01-07T00:00:00+00:00",
+                    "granularity": "day",
+                },
+            ),
+            applied_filters=SimpleNamespace(
+                meter="electricity",
+                granularity="day",
+            ),
             warnings=[],
         )
 
@@ -342,12 +348,12 @@ def run_service_query_assistant_test() -> dict[str, Any]:
     result = build_query_intent(payload)
     return {
         "summary": result.summary,
-        "recommended_endpoint": result.recommended_endpoint,
-        "recommended_http_method": result.recommended_http_method,
-        "meter": result.query_intent.meter,
-        "granularity": result.query_intent.granularity,
+        "endpoint": result.query_plan.endpoint,
+        "method": result.query_plan.method,
+        "meter": result.applied_filters.meter,
+        "granularity": result.applied_filters.granularity,
         "used_fallback": result.meta.used_fallback,
-        "recommended_query_params": result.recommended_query_params,
+        "query_plan_params": result.query_plan.params,
     }
 
 
@@ -362,8 +368,8 @@ def run_http_query_assistant_test() -> dict[str, Any]:
     body = response.json()
     return {
         "status_code": response.status_code,
-        "recommended_endpoint": body.get("recommended_endpoint"),
-        "recommended_http_method": body.get("recommended_http_method"),
+        "endpoint": body.get("query_plan", {}).get("endpoint"),
+        "method": body.get("query_plan", {}).get("method"),
         "used_fallback": body.get("meta", {}).get("used_fallback"),
     }
 

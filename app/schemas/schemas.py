@@ -30,8 +30,11 @@ from .schemas_ai import AIReferenceItem
 from .schemas_ai import AISuggestedAction
 from .schemas_ai import AIUsedToolItem
 from .schemas_ai import AIQueryAssistantMeta
+from .schemas_ai import AIQueryAssistantFilters
+from .schemas_ai import AIQueryAssistantPlan
 from .schemas_ai import AIQueryAssistantRequest
 from .schemas_ai import AIQueryAssistantResponse
+from .schemas_ai import AIQueryAssistantUIPatch
 from .schemas_ai import AIQueryIntent
 from .schemas_ai import AIReportSummaryAction
 from .schemas_ai import AIReportSummaryAnomalySnapshotInput
@@ -132,8 +135,11 @@ __all__ = [
     "AISuggestedAction",
     "AIUsedToolItem",
     "AIQueryAssistantMeta",
+    "AIQueryAssistantFilters",
+    "AIQueryAssistantPlan",
     "AIQueryAssistantRequest",
     "AIQueryAssistantResponse",
+    "AIQueryAssistantUIPatch",
     "AIQueryIntent",
     "AIReportSummaryAction",
     "AIReportSummaryAnomalySnapshotInput",

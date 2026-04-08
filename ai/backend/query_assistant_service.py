@@ -6,8 +6,11 @@ from datetime import timedelta
 from typing import Any
 
 from app.schemas import AIQueryAssistantMeta
+from app.schemas import AIQueryAssistantFilters
+from app.schemas import AIQueryAssistantPlan
 from app.schemas import AIQueryAssistantRequest
 from app.schemas import AIQueryAssistantResponse
+from app.schemas import AIQueryAssistantUIPatch
 from app.schemas import AIQueryIntent
 from app.schemas import TimeRange
 from app.services.service_common import build_api_time_range
@@ -85,6 +88,15 @@ def _extract_limit(question: str) -> int | None:
     if not match:
         return None
     return max(1, min(int(match.group(1)), 100))
+
+
+def _extract_order(question: str) -> str | None:
+    lowered = question.lower()
+    if any(keyword in lowered for keyword in ("最低", "最小", "升序", "asc")):
+        return "asc"
+    if any(keyword in lowered for keyword in ("最高", "最大", "降序", "desc")):
+        return "desc"
+    return None
 
 
 def _extract_building_ids(question: str) -> list[str]:
@@ -201,6 +213,50 @@ def _resolve_time_range(question: str, now: datetime) -> tuple[TimeRange, list[s
     return build_api_time_range(start, end), warnings
 
 
+def _merge_with_current_filters(
+    payload: AIQueryAssistantRequest,
+    *,
+    building_ids: list[str],
+    meter: str | None,
+    time_range: TimeRange | None,
+    granularity: str | None,
+    metric: str | None,
+    limit: int | None,
+    order: str | None,
+) -> tuple[list[str], str | None, TimeRange | None, str | None, str | None, int | None, str | None, list[str]]:
+    warnings: list[str] = []
+    current_filters = payload.current_filters
+    if current_filters is None:
+        return building_ids, meter, time_range, granularity, metric, limit, order, warnings
+
+    merged_building_ids = building_ids or current_filters.building_ids
+    merged_meter = meter or current_filters.meter
+    merged_time_range = time_range or current_filters.time_range
+    merged_granularity = granularity or current_filters.granularity
+    merged_metric = metric or current_filters.metric
+    merged_limit = limit or current_filters.limit
+    merged_order = order or current_filters.order
+
+    if not building_ids and current_filters.building_ids:
+        warnings.append("未明确建筑范围，已沿用当前页面建筑筛选。")
+    if meter is None and current_filters.meter:
+        warnings.append("未明确表计类型，已沿用当前页面表计筛选。")
+    if time_range is None and current_filters.time_range:
+        warnings.append("未明确时间范围，已沿用当前页面时间筛选。")
+    if granularity is None and current_filters.granularity:
+        warnings.append("未明确时间粒度，已沿用当前页面粒度。")
+    return (
+        merged_building_ids,
+        merged_meter,
+        merged_time_range,
+        merged_granularity,
+        merged_metric,
+        merged_limit,
+        merged_order,
+        warnings,
+    )
+
+
 def _recommend_endpoint(question: str, intent: AIQueryIntent) -> str:
     lowered = question.lower()
     building_count = len(intent.building_ids)
@@ -229,6 +285,8 @@ def _intent_to_query_params(intent: AIQueryIntent, endpoint: str) -> dict[str, A
     params: dict[str, Any] = {}
     if intent.building_ids and endpoint in {'/energy/query', '/energy/trend', '/energy/compare'}:
         params['building_ids'] = intent.building_ids
+    if intent.building_id and endpoint in {'/energy/weather-correlation', '/energy/cop'}:
+        params['building_id'] = intent.building_id
     if intent.site_id and endpoint in {'/energy/query', '/energy/trend'}:
         params['site_id'] = intent.site_id
     if intent.meter:
@@ -242,28 +300,100 @@ def _intent_to_query_params(intent: AIQueryIntent, endpoint: str) -> dict[str, A
         params['aggregation'] = intent.aggregation
     if intent.metric and endpoint in {'/energy/compare', '/energy/rankings'}:
         params['metric'] = intent.metric
+    if intent.order and endpoint == '/energy/rankings':
+        params['order'] = intent.order
     if intent.limit and endpoint == '/energy/rankings':
         params['limit'] = intent.limit
+    if intent.page and endpoint == '/energy/query':
+        params['page'] = intent.page
+    if intent.page_size and endpoint == '/energy/query':
+        params['page_size'] = intent.page_size
     if endpoint == '/energy/anomaly-analysis' and intent.time_range:
         params = {
-            'building_id': intent.building_ids[0] if intent.building_ids else '',
+            'building_id': intent.building_id or (intent.building_ids[0] if intent.building_ids else ''),
             'meter': intent.meter,
             'time_range': {
                 'start': intent.time_range.start.isoformat(),
                 'end': intent.time_range.end.isoformat(),
             },
             'granularity': intent.granularity or 'hour',
-            'analysis_mode': 'offline_event_review',
-            'include_weather_context': True,
+            'analysis_mode': intent.analysis_mode or 'offline_event_review',
+            'include_weather_context': True if intent.include_weather_context is None else intent.include_weather_context,
         }
     if endpoint == '/energy/weather-correlation':
         params = {
-            'building_id': intent.building_ids[0] if intent.building_ids else '',
+            'building_id': intent.building_id or (intent.building_ids[0] if intent.building_ids else ''),
             'meter': intent.meter,
             'start_time': intent.time_range.start.isoformat() if intent.time_range else None,
             'end_time': intent.time_range.end.isoformat() if intent.time_range else None,
         }
     return {key: value for key, value in params.items() if value not in (None, '', [], {})}
+
+
+def _build_applied_filters(intent: AIQueryIntent, endpoint: str) -> AIQueryAssistantFilters:
+    building_id = intent.building_id
+    if building_id is None and endpoint in {"/energy/weather-correlation", "/energy/anomaly-analysis"} and intent.building_ids:
+        building_id = intent.building_ids[0]
+    return AIQueryAssistantFilters(
+        building_ids=intent.building_ids,
+        building_id=building_id,
+        site_id=intent.site_id,
+        meter=intent.meter,
+        time_range=intent.time_range,
+        granularity=intent.granularity,
+        aggregation=intent.aggregation,
+        metric=intent.metric,
+        order=intent.order,
+        limit=intent.limit,
+        page=intent.page,
+        page_size=intent.page_size,
+        analysis_mode=intent.analysis_mode,
+        include_weather_context=intent.include_weather_context,
+    )
+
+
+def _build_ui_patch(endpoint: str, intent: AIQueryIntent) -> AIQueryAssistantUIPatch:
+    if endpoint == "/energy/trend":
+        return AIQueryAssistantUIPatch(
+            primary_view="trend_chart",
+            chart_type="line",
+            highlighted_filters=["building_ids", "meter", "time_range", "granularity"],
+            suggested_interaction="update_filters_and_refresh",
+        )
+    if endpoint == "/energy/query":
+        return AIQueryAssistantUIPatch(
+            primary_view="detail_table",
+            chart_type=None,
+            highlighted_filters=["building_ids", "site_id", "meter", "time_range", "granularity", "aggregation", "page", "page_size"],
+            suggested_interaction="update_filters_and_refresh",
+        )
+    if endpoint == "/energy/compare":
+        return AIQueryAssistantUIPatch(
+            primary_view="compare_chart",
+            chart_type="bar",
+            highlighted_filters=["building_ids", "meter", "time_range", "metric"],
+            suggested_interaction="update_filters_and_refresh",
+        )
+    if endpoint == "/energy/rankings":
+        return AIQueryAssistantUIPatch(
+            primary_view="ranking_table",
+            chart_type="bar",
+            highlighted_filters=["meter", "time_range", "metric", "order", "limit"],
+            suggested_interaction="update_filters_and_refresh",
+        )
+    if endpoint == "/energy/weather-correlation":
+        return AIQueryAssistantUIPatch(
+            primary_view="weather_correlation_panel",
+            chart_type="scatter",
+            highlighted_filters=["building_id", "meter", "time_range"],
+            suggested_interaction="update_filters_and_refresh",
+        )
+    return AIQueryAssistantUIPatch(
+        primary_view="anomaly_panel",
+        chart_type="line",
+        highlighted_filters=["building_id", "meter", "time_range", "granularity"],
+        suggested_interaction="update_filters_and_refresh",
+    )
 
 
 def _build_fallback_intent(payload: AIQueryAssistantRequest) -> tuple[AIQueryIntent, list[str]]:
@@ -272,24 +402,71 @@ def _build_fallback_intent(payload: AIQueryAssistantRequest) -> tuple[AIQueryInt
     warnings: list[str] = []
     building_ids = _extract_building_ids(payload.question)
     meter = _extract_meter(payload.question)
+    resolved_time_range, time_warnings = _resolve_time_range(payload.question, now)
+    warnings.extend(time_warnings)
+    raw_granularity = _extract_granularity(payload.question)
+    granularity = normalize_granularity(raw_granularity)
+    metric = 'sum' if any(keyword in payload.question.lower() for keyword in ('总', 'sum', 'total')) else None
+    limit = _extract_limit(payload.question)
+    order = _extract_order(payload.question)
+    time_range_for_merge = resolved_time_range
+    current_filters = payload.current_filters
+    if (
+        current_filters
+        and current_filters.time_range
+        and any(item == '未明确时间范围，已按最近7天处理。' for item in time_warnings)
+    ):
+        time_range_for_merge = None
+        warnings = [item for item in warnings if item != '未明确时间范围，已按最近7天处理。']
+    (
+        building_ids,
+        meter,
+        time_range,
+        granularity,
+        metric,
+        limit,
+        order,
+        current_filter_warnings,
+    ) = _merge_with_current_filters(
+        payload,
+        building_ids=building_ids,
+        meter=meter,
+        time_range=time_range_for_merge,
+        granularity=raw_granularity,
+        metric=metric,
+        limit=limit,
+        order=order,
+    )
+    warnings.extend(current_filter_warnings)
     if meter is None:
         meter = normalize_meter(None)
         warnings.append('未明确表计类型，已按 electricity 处理。')
-    time_range, time_warnings = _resolve_time_range(payload.question, now)
-    warnings.extend(time_warnings)
-    granularity = normalize_granularity(_extract_granularity(payload.question))
-    if _extract_granularity(payload.question) is None:
+    if granularity is None:
+        granularity = normalize_granularity(None)
         warnings.append('未明确时间粒度，已按 day 处理。')
-    metric = 'sum' if any(keyword in payload.question.lower() for keyword in ('总', 'sum', 'total')) else None
-    limit = _extract_limit(payload.question)
+    building_id = current_filters.building_id if current_filters else None
+    page = current_filters.page if current_filters else None
+    page_size = current_filters.page_size if current_filters else None
+    aggregation = current_filters.aggregation if current_filters else None
+    site_id = current_filters.site_id if current_filters else None
+    analysis_mode = current_filters.analysis_mode if current_filters else "offline_event_review"
+    include_weather_context = current_filters.include_weather_context if current_filters else True
     return (
         AIQueryIntent(
             building_ids=building_ids,
+            building_id=building_id,
+            site_id=site_id,
             meter=meter,
             time_range=time_range,
             granularity=granularity,
+            aggregation=aggregation,
             metric=metric,
+            order=order,
             limit=limit,
+            page=page,
+            page_size=page_size,
+            analysis_mode=analysis_mode,
+            include_weather_context=include_weather_context,
         ),
         warnings,
     )
@@ -321,25 +498,34 @@ def _normalize_llm_result(
     time_range = _normalize_time_range(intent_payload.get('time_range'), fallback_intent.time_range) if fallback_intent.time_range else None
     intent = AIQueryIntent(
         building_ids=[str(item) for item in intent_payload.get('building_ids', []) if str(item).strip()] or fallback_intent.building_ids,
+        building_id=str(intent_payload.get('building_id')).strip() if intent_payload.get('building_id') else fallback_intent.building_id,
         site_id=str(intent_payload.get('site_id')).strip() if intent_payload.get('site_id') else fallback_intent.site_id,
         meter=normalize_meter(intent_payload.get('meter') or fallback_intent.meter),
         time_range=time_range or fallback_intent.time_range,
         granularity=normalize_granularity(intent_payload.get('granularity') or fallback_intent.granularity),
         aggregation=str(intent_payload.get('aggregation')).strip() if intent_payload.get('aggregation') else fallback_intent.aggregation,
         metric=str(intent_payload.get('metric')).strip() if intent_payload.get('metric') else fallback_intent.metric,
+        order=str(intent_payload.get('order')).strip() if intent_payload.get('order') else fallback_intent.order,
         limit=int(intent_payload.get('limit')) if intent_payload.get('limit') else fallback_intent.limit,
+        page=int(intent_payload.get('page')) if intent_payload.get('page') else fallback_intent.page,
+        page_size=int(intent_payload.get('page_size')) if intent_payload.get('page_size') else fallback_intent.page_size,
+        analysis_mode=str(intent_payload.get('analysis_mode')).strip() if intent_payload.get('analysis_mode') else fallback_intent.analysis_mode,
+        include_weather_context=bool(intent_payload.get('include_weather_context')) if 'include_weather_context' in intent_payload else fallback_intent.include_weather_context,
     )
     endpoint = str(llm_response.get('recommended_endpoint') or _recommend_endpoint('', intent)).strip()
     if endpoint not in ALLOWED_QUERY_ENDPOINTS:
         endpoint = _recommend_endpoint('', intent)
-    query_params = _intent_to_query_params(intent, endpoint)
+    query_plan = AIQueryAssistantPlan(
+        endpoint=endpoint,
+        method=_http_method_for_endpoint(endpoint),
+        params=_intent_to_query_params(intent, endpoint),
+    )
     warnings = [str(item) for item in llm_response.get('warnings', []) if str(item).strip()] or fallback_warnings
     return AIQueryAssistantResponse(
         summary=str(llm_response.get('summary') or f'已将问题解析为 {endpoint} 查询。'),
-        query_intent=intent,
-        recommended_endpoint=endpoint,
-        recommended_http_method=_http_method_for_endpoint(endpoint),
-        recommended_query_params=query_params,
+        query_plan=query_plan,
+        applied_filters=_build_applied_filters(intent, endpoint),
+        ui_patch=_build_ui_patch(endpoint, intent),
         warnings=warnings,
         meta=AIQueryAssistantMeta(
             generated_at=get_taipei_now(),
@@ -357,12 +543,16 @@ def _build_fallback_response(
 ) -> AIQueryAssistantResponse:
     """在 LLM 失败时返回可解释的规则兜底响应。"""
     endpoint = _recommend_endpoint(payload.question, fallback_intent)
+    query_plan = AIQueryAssistantPlan(
+        endpoint=endpoint,
+        method=_http_method_for_endpoint(endpoint),
+        params=_intent_to_query_params(fallback_intent, endpoint),
+    )
     return AIQueryAssistantResponse(
-        summary=f'已将问题解析为 {endpoint} 的查询意图。',
-        query_intent=fallback_intent,
-        recommended_endpoint=endpoint,
-        recommended_http_method=_http_method_for_endpoint(endpoint),
-        recommended_query_params=_intent_to_query_params(fallback_intent, endpoint),
+        summary=f'已将问题解析为 {endpoint} 的页面筛选方案。',
+        query_plan=query_plan,
+        applied_filters=_build_applied_filters(fallback_intent, endpoint),
+        ui_patch=_build_ui_patch(endpoint, fallback_intent),
         warnings=fallback_warnings,
         meta=AIQueryAssistantMeta(
             generated_at=get_taipei_now(),
@@ -421,6 +611,8 @@ def build_query_intent(payload: AIQueryAssistantRequest) -> AIQueryAssistantResp
         system_prompt, user_prompt = build_query_assistant_prompts(
             question=payload.question,
             current_time_iso=_now_with_tz(payload).isoformat(),
+            current_endpoint=payload.current_endpoint,
+            current_filters=payload.current_filters.model_dump(mode="json") if payload.current_filters else None,
         )
         llm_response = OpenAICompatibleClient(settings).generate_json(
             system_prompt=system_prompt,

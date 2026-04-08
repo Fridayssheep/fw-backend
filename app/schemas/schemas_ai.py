@@ -83,18 +83,56 @@ class AIAnalyzeAnomalyResponse(BaseModel):
 
 class AIQueryIntent(BaseModel):
     building_ids: list[str] = Field(default_factory=list)
+    building_id: str | None = None
     site_id: str | None = None
     meter: str | None = None
     time_range: TimeRange | None = None
     granularity: str | None = None
     aggregation: str | None = None
     metric: str | None = None
+    order: str | None = None
     limit: int | None = None
+    page: int | None = None
+    page_size: int | None = None
+    analysis_mode: str | None = None
+    include_weather_context: bool | None = None
+
+
+class AIQueryAssistantFilters(BaseModel):
+    building_ids: list[str] = Field(default_factory=list)
+    building_id: str | None = None
+    site_id: str | None = None
+    meter: str | None = None
+    time_range: TimeRange | None = None
+    granularity: str | None = None
+    aggregation: str | None = None
+    metric: str | None = None
+    order: str | None = None
+    limit: int | None = None
+    page: int | None = None
+    page_size: int | None = None
+    analysis_mode: str | None = None
+    include_weather_context: bool | None = None
+
+
+class AIQueryAssistantPlan(BaseModel):
+    endpoint: str
+    method: str
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class AIQueryAssistantUIPatch(BaseModel):
+    primary_view: str
+    chart_type: str | None = None
+    highlighted_filters: list[str] = Field(default_factory=list)
+    suggested_interaction: str | None = None
 
 
 class AIQueryAssistantRequest(BaseModel):
     question: str
     current_time: datetime | None = None
+    current_endpoint: str | None = None
+    current_filters: AIQueryAssistantFilters | None = None
 
 
 class AIQueryAssistantMeta(BaseModel):
@@ -105,10 +143,9 @@ class AIQueryAssistantMeta(BaseModel):
 
 class AIQueryAssistantResponse(BaseModel):
     summary: str
-    query_intent: AIQueryIntent
-    recommended_endpoint: str
-    recommended_http_method: str
-    recommended_query_params: dict[str, Any] = Field(default_factory=dict)
+    query_plan: AIQueryAssistantPlan
+    applied_filters: AIQueryAssistantFilters
+    ui_patch: AIQueryAssistantUIPatch
     warnings: list[str] = Field(default_factory=list)
     meta: AIQueryAssistantMeta
 
