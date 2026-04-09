@@ -20,7 +20,7 @@ router = APIRouter(tags=["System"])  # 创建 system 分组路由对象，并统
 def get_system_health_api() -> SystemHealth:  # 定义健康检查接口处理函数。
     return get_system_health_service()  # 调用 system 业务层并返回结果。
 
-@router.get("/dataset/anomaly-progress-stream", summary="离线跑批进度推流 (SSE)")
+@router.get("/dataset/anomaly-progress", summary="离线跑批进度推流 (SSE)")
 async def anomaly_progress_stream_api(request: Request):
     """
     提供给前端用来监听离线跑批进度的接口。
@@ -80,4 +80,4 @@ def upload_raw_meter_api(meter_type: str, background_tasks: BackgroundTasks, fil
     """接收宽表 CSV 文件。系统将独立对此文件执行 0 值和卡断清洗，纵向解包追加至总库并**触发该表类型的异常排查算法**。"""
     tmp_path = _save_upload_file_temp(file)
     background_tasks.add_task(process_raw_meter_upload, meter_type, tmp_path)
-    return {"status": "ok", "message": f"{meter_type} 表计宽表已接受，正在后台进行全量清洗降维与智能异常巡检分析..."}
+    return {"status": "ok", "message": f"{meter_type} 表计宽表已接受"}

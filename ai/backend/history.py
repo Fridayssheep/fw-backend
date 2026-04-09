@@ -1,4 +1,4 @@
-﻿from typing import Any
+from typing import Any
 
 from app.core.database import fetch_all
 
