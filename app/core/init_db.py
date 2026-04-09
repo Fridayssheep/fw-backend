@@ -18,6 +18,7 @@ _SQL_FILES: list[Path] = [
     _PROJECT_ROOT / "app" / "core" / "sql" / "anomaly_events.sql",
     _PROJECT_ROOT / "app" / "core" / "sql" / "ai_anomaly_feedback.sql",
     _PROJECT_ROOT / "app" / "core" / "sql" / "ai_qa_sessions.sql",
+    _PROJECT_ROOT / "app" / "core" / "sql" / "reports.sql",
 ]
 
 _INDEX_FILE: Path = _PROJECT_ROOT / "app" / "core" / "sql" / "create_indexes.sql"
