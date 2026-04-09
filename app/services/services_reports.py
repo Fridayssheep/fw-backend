@@ -1,5 +1,6 @@
 from __future__ import annotations  # 启用前向引用语法，避免类型注解顺序限制。
 
+from collections import defaultdict  # 导入默认字典，方便做多表计结果聚合统计。
 import json  # 导入 JSON 库，用于报表内容序列化与反序列化。
 import uuid  # 导入 UUID 库，用于生成报表 ID。
 from datetime import datetime  # 导入日期时间类型，用于时间字段处理。
@@ -7,6 +8,7 @@ from typing import Any  # 导入任意类型注解，方便描述动态结构。
 
 from ai.backend.report_summary_service import get_report_summary  # 导入 AI 报表总结服务。
 from app.core.database import execute_sql  # 导入写库函数，用于持久化报表。
+from app.core.database import fetch_all  # 导入多行查询函数，用于查询建筑可用表计列表。
 from app.core.database import fetch_one  # 导入单行查询函数，用于查询报表详情。
 from app.schemas.schemas_ai import AIReportSummaryAnomalySnapshotInput  # 导入 AI 异常快照输入模型。
 from app.schemas.schemas_ai import AIReportSummaryContextInput  # 导入 AI 报表上下文输入模型。
@@ -48,10 +50,73 @@ SUPPORTED_EXPORT_FORMATS = {"md"}  # 按需求仅支持基础 Markdown 导出。
 DEFAULT_REPORT_METER = "electricity"  # 定义报表默认表计类型（与 API 文档一致，不从请求体接收）。
 DEFAULT_REPORT_GRANULARITY = "day"  # 定义报表默认粒度（内部固定使用 day）。
 DEFAULT_REPORT_RANKING_LIMIT = 10  # 定义报表默认排行条数（内部固定为 Top10）。
+REPORT_MULTI_METER_LABEL = "multi_meter"  # 定义多表计报表在响应中的标识。
+REPORT_METER_PRIORITY = (  # 定义报表优先展示的表计顺序。
+    "electricity",
+    "chilledwater",
+    "hotwater",
+    "steam",
+    "gas",
+    "water",
+    "irrigation",
+    "solar",
+)
 
 
 def _build_report_id() -> str:  # 定义生成报表 ID 的函数。
     return f"rpt_{uuid.uuid4().hex[:16]}"  # 返回固定前缀+16位随机串作为报表 ID。
+
+
+def _sort_report_meters(meters: list[str]) -> list[str]:  # 定义报表表计排序函数。
+    cleaned: list[str] = []  # 初始化清洗后表计列表。
+    seen: set[str] = set()  # 初始化去重集合。
+    for meter in meters:  # 遍历输入表计列表。
+        meter_text = str(meter or "").strip()  # 标准化表计文本。
+        if not meter_text or meter_text in seen:  # 如果为空或重复，
+            continue  # 跳过当前项。
+        seen.add(meter_text)  # 记录已出现表计。
+        cleaned.append(meter_text)  # 写入清洗后的表计列表。
+    priority_map = {name: index for index, name in enumerate(REPORT_METER_PRIORITY)}  # 构造优先级映射字典。
+    return sorted(cleaned, key=lambda item: (priority_map.get(item, len(priority_map)), item))  # 按预设优先级排序并返回。
+
+
+def _list_building_meters(  # 定义查询建筑可用表计列表函数。
+    building_id: str,  # 接收建筑编号。
+    start_time: datetime,  # 接收查询开始时间。
+    end_time: datetime,  # 接收查询结束时间。
+) -> list[str]:  # 返回当前建筑在时间范围内可用的表计列表。
+    rows = fetch_all(  # 先按当前报表时间范围查询有读数的表计类型。
+        """
+        SELECT DISTINCT mr.meter
+        FROM meter_readings mr
+        WHERE mr.building_id = :building_id
+          AND mr.timestamp >= :start_time
+          AND mr.timestamp <= :end_time
+        ORDER BY mr.meter ASC
+        """,
+        {"building_id": building_id, "start_time": start_time, "end_time": end_time},
+    )  # 执行范围内表计查询。
+    meters = [str(row.get("meter") or "").strip() for row in rows if str(row.get("meter") or "").strip()]  # 提取非空表计值。
+    if meters:  # 如果范围内已查到可用表计，
+        return _sort_report_meters(meters)  # 直接返回排序后的结果。
+    fallback_rows = fetch_all(  # 如果范围内无数据，则回退到建筑全量历史数据再查一次。
+        """
+        SELECT DISTINCT mr.meter
+        FROM meter_readings mr
+        WHERE mr.building_id = :building_id
+        ORDER BY mr.meter ASC
+        """,
+        {"building_id": building_id},
+    )  # 执行全量表计查询。
+    fallback_meters = [str(row.get("meter") or "").strip() for row in fallback_rows if str(row.get("meter") or "").strip()]  # 提取非空表计值。
+    return _sort_report_meters(fallback_meters)  # 返回排序后的兜底表计列表。
+
+
+def _select_primary_meter(meters: list[str]) -> str:  # 定义选择报表主表计函数。
+    ordered_meters = _sort_report_meters(meters)  # 先按优先级排序。
+    if ordered_meters:  # 如果存在可用表计，
+        return ordered_meters[0]  # 返回优先级最高的表计作为主口径。
+    return normalize_meter(DEFAULT_REPORT_METER)  # 如果没有可用表计，回退到默认 electricity。
 
 
 def _build_download_url(report_id: str, base_url: str | None = None) -> str:  # 定义构造下载地址函数。
@@ -287,6 +352,20 @@ def _build_markdown_export(report_payload: dict[str, Any]) -> str:  # 定义 Mar
             "",  # 空行分隔。
         ]
     )  # 完成总览表格追加。
+    summary_by_meter = summary_data.get("by_meter") or []  # 读取分表计摘要列表。
+    summary_meter_rows = [item for item in summary_by_meter if isinstance(item, dict)]  # 过滤合法分表计摘要。
+    if len(summary_meter_rows) > 1:  # 如果存在多表计摘要，
+        lines.append("### 分表计摘要")  # 写入分表计摘要子标题。
+        lines.append("| 表计 | 总量 | 均值 | 峰值 | 峰值时间 |")  # 写入分表计摘要表头。
+        lines.append("| --- | --- | --- | --- | --- |")  # 写入分表计摘要分隔线。
+        for item in summary_meter_rows:  # 遍历每个表计摘要。
+            current_meter = item.get("meter") or "N/A"  # 读取表计名称。
+            current_unit = str(item.get("unit") or "")  # 读取表计单位。
+            lines.append(  # 写入分表计摘要行。
+                f"| {current_meter} | {item.get('total', 'N/A')} {current_unit} | {item.get('average', 'N/A')} {current_unit} | "
+                f"{item.get('peak', 'N/A')} {current_unit} | {item.get('peak_time') or 'N/A'} |"
+            )
+        lines.append("")  # 追加空行。
     metric_values = [item for item in [total_value, average_value, peak_value] if item is not None]  # 过滤出有效指标值。
     if len(metric_values) == 3:  # 如果三项指标都有效，
         lines.extend(  # 追加指标柱状图。
@@ -301,9 +380,22 @@ def _build_markdown_export(report_payload: dict[str, Any]) -> str:  # 定义 Mar
 
     lines.append("## 能耗趋势")  # 写入能耗趋势标题。
     trend_series = trend_data.get("series") or []  # 读取趋势序列列表。
+    trend_rows = [item for item in trend_series if isinstance(item, dict)]  # 过滤合法趋势序列。
+    trend_meter_values = _sort_report_meters([str(item.get("meter") or "").strip() for item in trend_rows if str(item.get("meter") or "").strip()])  # 提取并排序趋势覆盖表计。
+    if trend_meter_values:  # 如果趋势包含表计信息，
+        lines.append(f"- 覆盖表计: {', '.join(trend_meter_values)}")  # 输出覆盖表计提示。
+        lines.append("")  # 追加空行。
     trend_points = []  # 初始化趋势点位列表。
-    if trend_series and isinstance(trend_series[0], dict):  # 如果存在第一条合法序列，
-        trend_points = trend_series[0].get("points") or []  # 读取第一条序列点位。
+    preferred_meter = str(report_payload.get("meter") or "").strip()  # 读取当前报表主表计。
+    selected_series = None  # 初始化被选中的趋势序列为空。
+    for item in trend_rows:  # 先尝试命中主表计序列。
+        if (item.get("meter") or "").strip() == preferred_meter:  # 如果命中主表计，
+            selected_series = item  # 记录主表计序列。
+            break  # 结束查找。
+    if selected_series is None and trend_rows:  # 如果未命中主表计但存在序列，
+        selected_series = trend_rows[0]  # 回退到第一条序列。
+    if selected_series is not None:  # 如果找到可用序列，
+        trend_points = selected_series.get("points") or []  # 读取序列点位。
     valid_trend_points = [point for point in trend_points if isinstance(point, dict)]  # 过滤出合法点位对象。
     if len(valid_trend_points) > 16:  # 如果点位过多不利于阅读，
         step = max(len(valid_trend_points) // 16, 1)  # 计算抽样步长。
@@ -335,19 +427,39 @@ def _build_markdown_export(report_payload: dict[str, Any]) -> str:  # 定义 Mar
     lines.append("## 建筑能耗排行")  # 写入能耗排行标题。
     ranking_items = ranking_data.get("items") or []  # 读取排行条目列表。
     ranking_rows = [item for item in ranking_items if isinstance(item, dict)]  # 过滤合法排行条目。
+    ranking_meter_values = _sort_report_meters([str(item.get("meter") or "").strip() for item in ranking_rows if str(item.get("meter") or "").strip()])  # 提取并排序排行覆盖表计。
+    include_meter_column = len(ranking_meter_values) > 1  # 如果排行包含多个表计，则展示表计列。
     if ranking_rows:  # 如果排行数据存在，
-        lines.append("| 排名 | 建筑 | 数值 |")  # 写入排行表头。
-        lines.append("| --- | --- | --- |")  # 写入表格分隔线。
+        if include_meter_column:  # 如果需要展示表计列，
+            lines.append("| 排名 | 表计 | 建筑 | 数值 |")  # 写入多表计排行表头。
+            lines.append("| --- | --- | --- | --- |")  # 写入多表计排行分隔线。
+        else:  # 如果只包含单表计，
+            lines.append("| 排名 | 建筑 | 数值 |")  # 写入单表计排行表头。
+            lines.append("| --- | --- | --- |")  # 写入单表计排行分隔线。
         for item in ranking_rows[:10]:  # 遍历前 10 条排行数据。
-            lines.append(f"| {item.get('rank', '-')} | {item.get('building_id', '-')} | {item.get('value', '-')} {item.get('unit') or ''} |")  # 写入排行行。
+            if include_meter_column:  # 如果是多表计排行，
+                lines.append(  # 写入多表计排行行。
+                    f"| {item.get('rank', '-')} | {item.get('meter') or '-'} | {item.get('building_id', '-')} | "
+                    f"{item.get('value', '-')} {item.get('unit') or ''} |"
+                )
+            else:  # 如果是单表计排行，
+                lines.append(f"| {item.get('rank', '-')} | {item.get('building_id', '-')} | {item.get('value', '-')} {item.get('unit') or ''} |")  # 写入排行行。
         lines.append("")  # 追加空行分隔。
+        chart_rows = ranking_rows  # 初始化用于绘图的排行行列表。
+        if include_meter_column:  # 如果是多表计排行，
+            chart_rows = [item for item in ranking_rows if (item.get("meter") or "").strip() == preferred_meter]  # 优先只绘制主表计排行。
+            if not chart_rows:  # 如果主表计没有排行数据，
+                chart_rows = ranking_rows  # 回退使用原始排行数据绘图。
         ranking_labels: list[str] = []  # 初始化排行图标签列表。
         ranking_values: list[float] = []  # 初始化排行图数值列表。
-        for item in ranking_rows[:10]:  # 再遍历前 10 条用于画图。
+        for item in chart_rows[:10]:  # 再遍历前 10 条用于画图。
             value = _to_chart_number(item.get("value"))  # 读取并转换排行值。
             if value is None:  # 如果值无效，
                 continue  # 跳过该条目。
-            ranking_labels.append(_sanitize_mermaid_label(item.get("building_id"), max_length=12))  # 追加建筑标签。
+            label_text = item.get("building_id")  # 读取建筑标签文本。
+            if include_meter_column:  # 如果需要区分表计，
+                label_text = f"{item.get('building_id')}({item.get('meter')})"  # 把表计拼到标签里。
+            ranking_labels.append(_sanitize_mermaid_label(label_text, max_length=12))  # 追加建筑标签。
             ranking_values.append(value)  # 追加排行值。
         if ranking_labels and ranking_values:  # 如果存在可绘制排行数据，
             lines.extend(  # 追加排行柱状图。
@@ -379,6 +491,15 @@ def _build_markdown_export(report_payload: dict[str, Any]) -> str:  # 定义 Mar
                 lines.append(f'    "{label}" : {_format_chart_number(count_value)}')  # 写入饼图切片数据。
             lines.append("```")  # 写入 Mermaid 代码块结束。
             lines.append("")  # 追加空行。
+        anomaly_by_meter = anomaly_data.get("by_meter") or []  # 读取分表计异常分析结果。
+        anomaly_meter_rows = [item for item in anomaly_by_meter if isinstance(item, dict)]  # 过滤合法分表计异常结果。
+        if len(anomaly_meter_rows) > 1:  # 如果异常分析覆盖多个表计，
+            lines.append("### 分表计异常概览")  # 写入分表计异常子标题。
+            lines.append("| 表计 | 异常事件数 | 异常结论 |")  # 写入分表计异常表头。
+            lines.append("| --- | --- | --- |")  # 写入分表计异常分隔线。
+            for item in anomaly_meter_rows:  # 遍历每个表计异常结果。
+                lines.append(f"| {item.get('meter') or 'N/A'} | {item.get('event_count', 0)} | {item.get('summary') or '暂无'} |")  # 写入分表计异常行。
+            lines.append("")  # 追加空行。
 
     if weather_data:  # 如果存在天气相关性数据，
         lines.append("## 天气相关性")  # 写入天气相关性标题。
@@ -398,6 +519,15 @@ def _build_markdown_export(report_payload: dict[str, Any]) -> str:  # 定义 Mar
                     chart_kind="bar",  # 使用柱状图展示因子系数。
                 )
             )  # 完成天气图追加。
+        weather_by_meter = weather_data.get("by_meter") or []  # 读取分表计天气相关性结果。
+        weather_meter_rows = [item for item in weather_by_meter if isinstance(item, dict)]  # 过滤合法分表计天气结果。
+        if len(weather_meter_rows) > 1:  # 如果天气相关性覆盖多个表计，
+            lines.append("### 分表计天气相关性")  # 写入分表计天气相关性子标题。
+            lines.append("| 表计 | 相关系数 |")  # 写入分表计天气相关性表头。
+            lines.append("| --- | --- |")  # 写入分表计天气相关性分隔线。
+            for item in weather_meter_rows:  # 遍历分表计天气结果。
+                lines.append(f"| {item.get('meter') or 'N/A'} | {item.get('correlation_coefficient', 'N/A')} |")  # 写入分表计天气行。
+            lines.append("")  # 追加空行。
 
     ai_insight = report_payload.get("ai_insight")  # 读取 AI 洞察数据。
     if isinstance(ai_insight, dict):  # 如果存在 AI 洞察，
@@ -545,74 +675,198 @@ def _persist_report(  # 定义报表持久化函数。
 
 def generate_report(payload: GenerateReportRequest, base_url: str | None = None) -> GenerateReportResponse:  # 定义生成报表主函数。
     report_id = _build_report_id()  # 先生成本次报表 ID。
-    normalized_meter = normalize_meter(DEFAULT_REPORT_METER)  # 使用内部默认表计类型并做标准化。
+    fallback_meter = normalize_meter(DEFAULT_REPORT_METER)  # 先定义默认回退表计，避免异常分支丢失上下文。
+    display_meter = fallback_meter  # 初始化对外展示表计字段。
+    analyzed_meters: list[str] = [fallback_meter]  # 初始化参与分析的表计列表。
     try:  # 开始报表生成主流程。
         resolved_start, resolved_end = resolve_time_range(  # 按请求条件补齐时间范围。
             payload.time_range.start,  # 传入请求开始时间。
             payload.time_range.end,  # 传入请求结束时间。
             [payload.building_id] if payload.building_id else None,  # 传入建筑过滤（可选）。
             None,  # 当前报表不按 site 过滤。
-            normalized_meter,  # 传入标准化表计。
+            None if payload.building_id else fallback_meter,  # 指定建筑时按全表计补时间，否则维持默认电表口径。
         )  # 完成时间范围补齐。
         report_time_range = build_api_time_range(resolved_start, resolved_end)  # 转换为 API 标准时间范围对象。
 
-        summary_model = build_summary(  # 计算能耗摘要。
-            normalized_meter,  # 传入表计类型。
-            resolved_start,  # 传入开始时间。
-            resolved_end,  # 传入结束时间。
-            [payload.building_id] if payload.building_id else None,  # 传入建筑过滤。
-            None,  # 当前不按站点过滤。
-        )  # 完成能耗摘要计算。
-        summary_payload_python = summary_model.model_dump(mode="python")  # 生成 python 模式摘要（供 AI 构造使用）。
-        summary_payload_json = summary_model.model_dump(mode="json")  # 生成 json 模式摘要（供报表展示使用）。
+        if payload.building_id:  # 如果请求指定了建筑编号，
+            analyzed_meters = _list_building_meters(payload.building_id, resolved_start, resolved_end)  # 查询该建筑在当前时间范围内的可用表计。
+        if not analyzed_meters:  # 如果没有查到可用表计，
+            analyzed_meters = [fallback_meter]  # 回退到默认电表，保证流程可继续执行。
+        analyzed_meters = _sort_report_meters(analyzed_meters)  # 对参与分析的表计做稳定排序。
+        primary_meter = _select_primary_meter(analyzed_meters)  # 选择主展示表计（用于兼容旧结构与 AI 摘要）。
+        display_meter = primary_meter if len(analyzed_meters) == 1 else REPORT_MULTI_METER_LABEL  # 多表计时改用统一标识。
 
-        trend_model = get_energy_trend(  # 查询能耗趋势。
-            [payload.building_id] if payload.building_id else None,  # 传入建筑过滤。
-            None,  # 当前不按站点过滤。
-            normalized_meter,  # 传入表计类型。
-            resolved_start,  # 传入开始时间。
-            resolved_end,  # 传入结束时间。
-            DEFAULT_REPORT_GRANULARITY,  # 使用内部固定粒度 day。
-        )  # 完成趋势查询。
-        trend_payload_json = trend_model.model_dump(mode="json")  # 转为 json 字典供报表写入。
+        building_filters = [payload.building_id] if payload.building_id else None  # 预先构造建筑过滤条件。
+        summary_by_meter_json: list[dict[str, Any]] = []  # 初始化分表计摘要列表。
+        trend_series_combined: list[dict[str, Any]] = []  # 初始化组合趋势序列列表。
+        ranking_items_combined: list[dict[str, Any]] = []  # 初始化组合排行列表。
+        ranking_by_meter: list[dict[str, Any]] = []  # 初始化按表计分组排行列表。
+        primary_summary_payload_python: dict[str, Any] = {}  # 初始化主表计 python 摘要。
+        primary_summary_payload_json: dict[str, Any] = {}  # 初始化主表计 json 摘要。
+        primary_trend_payload_json: dict[str, Any] = {}  # 初始化主表计趋势数据。
+        primary_ranking_items: list[dict[str, Any]] = []  # 初始化主表计排行条目。
 
-        ranking_model = get_energy_rankings(  # 查询排行数据。
-            normalized_meter,  # 传入表计类型。
-            resolved_start,  # 传入开始时间。
-            resolved_end,  # 传入结束时间。
-            "sum",  # 固定按总量排行。
-            "desc",  # 固定降序。
-            DEFAULT_REPORT_RANKING_LIMIT,  # 使用内部固定排行条数上限。
-        )  # 完成排行查询。
-        ranking_payload_json = ranking_model.model_dump(mode="json")  # 转为 json 字典供报表写入。
+        for current_meter in analyzed_meters:  # 遍历每个需要分析的表计。
+            summary_model = build_summary(  # 计算当前表计摘要。
+                current_meter,  # 传入当前表计。
+                resolved_start,  # 传入开始时间。
+                resolved_end,  # 传入结束时间。
+                building_filters,  # 传入建筑过滤条件。
+                None,  # 当前不按站点过滤。
+            )  # 完成当前表计摘要计算。
+            current_summary_python = summary_model.model_dump(mode="python")  # 转成 python 模式摘要（供 AI 使用）。
+            current_summary_json = summary_model.model_dump(mode="json")  # 转成 json 模式摘要（供报表展示）。
+            summary_by_meter_json.append(current_summary_json)  # 追加到分表计摘要列表。
+            if current_meter == primary_meter:  # 如果当前是主表计，
+                primary_summary_payload_python = current_summary_python  # 记录主表计 python 摘要。
+                primary_summary_payload_json = current_summary_json  # 记录主表计 json 摘要。
+
+            trend_model = get_energy_trend(  # 查询当前表计趋势。
+                building_filters,  # 传入建筑过滤。
+                None,  # 当前不按站点过滤。
+                current_meter,  # 传入当前表计。
+                resolved_start,  # 传入开始时间。
+                resolved_end,  # 传入结束时间。
+                DEFAULT_REPORT_GRANULARITY,  # 使用内部固定粒度 day。
+            )  # 完成当前表计趋势查询。
+            current_trend_json = trend_model.model_dump(mode="json")  # 转成 json 字典。
+            if current_meter == primary_meter:  # 如果当前是主表计，
+                primary_trend_payload_json = current_trend_json  # 记录主表计趋势数据。
+            for series_item in current_trend_json.get("series", []):  # 遍历当前表计趋势序列。
+                if not isinstance(series_item, dict):  # 如果序列项结构不合法，
+                    continue  # 跳过当前序列项。
+                normalized_series = dict(series_item)  # 复制序列字典避免原地改动。
+                normalized_series["meter"] = series_item.get("meter") or current_meter  # 补全序列表计字段。
+                trend_series_combined.append(normalized_series)  # 追加到组合趋势序列。
+
+            ranking_model = get_energy_rankings(  # 查询当前表计排行。
+                current_meter,  # 传入当前表计。
+                resolved_start,  # 传入开始时间。
+                resolved_end,  # 传入结束时间。
+                "sum",  # 固定按总量排行。
+                "desc",  # 固定降序。
+                DEFAULT_REPORT_RANKING_LIMIT,  # 使用内部固定排行条数上限。
+            )  # 完成当前表计排行查询。
+            current_ranking_json = ranking_model.model_dump(mode="json")  # 转成 json 字典。
+            meter_ranking_items: list[dict[str, Any]] = []  # 初始化当前表计排行列表。
+            for ranking_item in current_ranking_json.get("items", []):  # 遍历当前表计排行条目。
+                if not isinstance(ranking_item, dict):  # 如果条目结构不合法，
+                    continue  # 跳过当前条目。
+                normalized_ranking_item = dict(ranking_item)  # 复制排行条目字典。
+                normalized_ranking_item["meter"] = current_meter  # 补全条目表计字段。
+                ranking_items_combined.append(normalized_ranking_item)  # 追加到组合排行列表。
+                meter_ranking_items.append(normalized_ranking_item)  # 追加到当前表计排行列表。
+            ranking_by_meter.append({"meter": current_meter, "items": meter_ranking_items})  # 写入按表计分组排行结果。
+            if current_meter == primary_meter:  # 如果当前是主表计，
+                primary_ranking_items = meter_ranking_items  # 记录主表计排行列表。
+
+        effective_building_id = payload.building_id  # 先使用请求中的建筑编号。
+        if not effective_building_id:  # 如果请求未指定建筑，
+            if primary_ranking_items:  # 优先尝试主表计排行数据，
+                effective_building_id = primary_ranking_items[0].get("building_id")  # 取主表计 Top1 建筑作为分析目标。
+            elif ranking_items_combined:  # 如果主表计排行为空但组合排行有数据，
+                effective_building_id = ranking_items_combined[0].get("building_id")  # 回退到组合排行首条建筑。
 
         anomaly_payload_json: dict[str, Any] | None = None  # 先初始化异常节为空。
         weather_payload_json: dict[str, Any] | None = None  # 先初始化天气节为空。
-        effective_building_id = payload.building_id  # 先使用请求中的建筑编号。
-        if not effective_building_id:  # 如果请求未指定建筑，
-            first_ranking = (ranking_payload_json.get("items") or [])  # 从排行中取候选建筑。
-            if first_ranking:  # 如果排行有数据，
-                effective_building_id = first_ranking[0].get("building_id")  # 用 Top1 建筑作为分析目标。
-
+        primary_anomaly_payload_json: dict[str, Any] | None = None  # 初始化主表计异常结果为空。
+        primary_weather_payload_json: dict[str, Any] | None = None  # 初始化主表计天气结果为空。
+        anomaly_by_meter: list[dict[str, Any]] = []  # 初始化分表计异常结果列表。
+        weather_by_meter: list[dict[str, Any]] = []  # 初始化分表计天气结果列表。
         if effective_building_id:  # 如果有可分析的建筑编号，
-            anomaly_model = get_energy_anomaly_analysis(  # 查询异常分析结果。
-                EnergyAnomalyAnalysisRequest(  # 构造异常分析请求对象。
-                    building_id=effective_building_id,  # 写入建筑编号。
-                    meter=normalized_meter,  # 写入表计类型。
-                    time_range=report_time_range,  # 写入时间范围。
-                    granularity=DEFAULT_REPORT_GRANULARITY,  # 写入内部固定粒度 day。
-                    analysis_mode="offline_event_review",  # 固定分析模式。
-                    include_weather_context=True,  # 默认包含天气上下文。
-                )  # 完成异常分析请求构造。
-            )  # 完成异常分析查询。
-            anomaly_payload_json = anomaly_model.model_dump(mode="json")  # 转为 json 字典供报表写入。
-            weather_model = get_energy_weather_correlation(  # 查询天气相关性结果。
-                effective_building_id,  # 传入建筑编号。
-                normalized_meter,  # 传入表计类型。
-                resolved_start,  # 传入开始时间。
-                resolved_end,  # 传入结束时间。
-            )  # 完成天气相关性查询。
-            weather_payload_json = weather_model.model_dump(mode="json")  # 转为 json 字典供报表写入。
+            detector_counter: defaultdict[tuple[str, str], int] = defaultdict(int)  # 初始化检测器事件计数字典。
+            total_event_count = 0  # 初始化总异常事件数。
+            has_anomaly = False  # 初始化是否存在异常标识。
+            for current_meter in analyzed_meters:  # 遍历每个表计做异常与天气分析。
+                anomaly_model = get_energy_anomaly_analysis(  # 查询当前表计异常分析结果。
+                    EnergyAnomalyAnalysisRequest(  # 构造异常分析请求对象。
+                        building_id=effective_building_id,  # 写入建筑编号。
+                        meter=current_meter,  # 写入当前表计类型。
+                        time_range=report_time_range,  # 写入时间范围。
+                        granularity=DEFAULT_REPORT_GRANULARITY,  # 写入内部固定粒度 day。
+                        analysis_mode="offline_event_review",  # 固定分析模式。
+                        include_weather_context=True,  # 默认包含天气上下文。
+                    )  # 完成异常分析请求构造。
+                )  # 完成异常分析查询。
+                anomaly_item = anomaly_model.model_dump(mode="json")  # 转为 json 字典供报表写入。
+                anomaly_item["meter"] = current_meter  # 补全异常结果表计字段。
+                anomaly_by_meter.append(anomaly_item)  # 追加当前表计异常结果。
+                total_event_count += int(anomaly_item.get("event_count") or 0)  # 累加异常事件数。
+                has_anomaly = has_anomaly or bool(anomaly_item.get("is_anomalous"))  # 更新是否存在异常标识。
+                for detector_item in anomaly_item.get("detector_breakdown") or []:  # 遍历当前表计检测器分布。
+                    if not isinstance(detector_item, dict):  # 如果检测器条目结构不合法，
+                        continue  # 跳过当前条目。
+                    key = (  # 构造检测器计数键。
+                        str(detector_item.get("detected_by") or "offline_detector"),  # 检测器名称。
+                        str(detector_item.get("event_type") or "offline_event"),  # 事件类型。
+                    )  # 完成键构造。
+                    detector_counter[key] += int(detector_item.get("count") or 0)  # 累加检测器计数。
+                if current_meter == primary_meter:  # 如果当前是主表计，
+                    primary_anomaly_payload_json = anomaly_item  # 记录主表计异常结果。
+
+                weather_model = get_energy_weather_correlation(  # 查询当前表计天气相关性结果。
+                    effective_building_id,  # 传入建筑编号。
+                    current_meter,  # 传入当前表计类型。
+                    resolved_start,  # 传入开始时间。
+                    resolved_end,  # 传入结束时间。
+                )  # 完成天气相关性查询。
+                weather_item = weather_model.model_dump(mode="json")  # 转为 json 字典供报表写入。
+                weather_item["meter"] = current_meter  # 补全天气结果表计字段。
+                weather_by_meter.append(weather_item)  # 追加当前表计天气结果。
+                if current_meter == primary_meter:  # 如果当前是主表计，
+                    primary_weather_payload_json = weather_item  # 记录主表计天气结果。
+
+            detector_breakdown = [  # 组装聚合后的检测器分布列表。
+                {"detected_by": key[0], "event_type": key[1], "count": count}  # 构造检测器分布条目。
+                for key, count in sorted(detector_counter.items(), key=lambda item: (-item[1], item[0][0], item[0][1]))  # 按数量和名称排序输出。
+            ]  # 完成检测器分布组装。
+            if primary_anomaly_payload_json is None and anomaly_by_meter:  # 如果主表计异常为空但存在异常结果，
+                primary_anomaly_payload_json = anomaly_by_meter[0]  # 回退取第一条异常结果作为主异常数据。
+            if primary_weather_payload_json is None and weather_by_meter:  # 如果主表计天气为空但存在天气结果，
+                primary_weather_payload_json = weather_by_meter[0]  # 回退取第一条天气结果作为主天气数据。
+            if anomaly_by_meter:  # 如果存在异常结果，
+                if len(anomaly_by_meter) == 1:  # 单表计时沿用原有异常结构，
+                    anomaly_payload_json = primary_anomaly_payload_json  # 直接复用主表计异常数据。
+                else:  # 多表计时输出聚合异常结构。
+                    anomaly_payload_json = {  # 组装多表计异常分节数据。
+                        "building_id": effective_building_id,  # 写入建筑编号。
+                        "meter": primary_meter,  # 写入主表计。
+                        "meters": analyzed_meters,  # 写入分析表计列表。
+                        "is_anomalous": has_anomaly,  # 写入总体异常标识。
+                        "summary": f"已完成 {len(anomaly_by_meter)} 种表计异常分析，累计异常事件 {total_event_count} 个。",  # 写入聚合摘要。
+                        "analysis_mode": "offline_event_review",  # 写入分析模式。
+                        "event_count": total_event_count,  # 写入总异常事件数。
+                        "detector_breakdown": detector_breakdown,  # 写入聚合检测器分布。
+                        "by_meter": anomaly_by_meter,  # 写入分表计异常结果。
+                    }  # 完成多表计异常分节组装。
+            if weather_by_meter:  # 如果存在天气相关性结果，
+                if len(weather_by_meter) == 1:  # 单表计时沿用原有天气结构，
+                    weather_payload_json = primary_weather_payload_json  # 直接复用主表计天气数据。
+                else:  # 多表计时输出聚合天气结构。
+                    weather_payload_json = {  # 组装多表计天气分节数据。
+                        "building_id": effective_building_id,  # 写入建筑编号。
+                        "meter": primary_meter,  # 写入主表计。
+                        "meters": analyzed_meters,  # 写入分析表计列表。
+                        "correlation_coefficient": (primary_weather_payload_json or {}).get("correlation_coefficient"),  # 兼容保留主相关系数字段。
+                        "factors": (primary_weather_payload_json or {}).get("factors", []),  # 兼容保留主因子列表字段。
+                        "by_meter": weather_by_meter,  # 写入分表计天气结果。
+                    }  # 完成多表计天气分节组装。
+
+        summary_payload_json = dict(primary_summary_payload_json)  # 以主表计摘要为兼容基底复制总览分节数据。
+        summary_payload_json["meter"] = primary_meter  # 明确写入主表计字段。
+        summary_payload_json["meters"] = analyzed_meters  # 写入本次分析覆盖的表计列表。
+        summary_payload_json["by_meter"] = summary_by_meter_json  # 写入分表计摘要列表。
+
+        trend_payload_json = {  # 组装趋势分节数据。
+            "series": trend_series_combined,  # 写入组合趋势序列。
+            "meters": analyzed_meters,  # 写入覆盖表计列表。
+        }  # 完成趋势分节数据组装。
+
+        ranking_payload_json = {  # 组装排行分节数据。
+            "items": ranking_items_combined,  # 写入组合排行条目。
+            "meters": analyzed_meters,  # 写入覆盖表计列表。
+            "by_meter": ranking_by_meter,  # 写入按表计分组排行结果。
+        }  # 完成排行分节数据组装。
 
         sections = _build_section_payloads(  # 构造报表分节列表。
             report_time_range,  # 传入标准化时间范围。
@@ -628,11 +882,11 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
             ai_request = _build_ai_report_request(  # 构造 AI 报表请求。
                 payload=payload,  # 传入原始报表请求。
                 effective_building_id=effective_building_id,  # 传入有效建筑编号。
-                meter=normalized_meter,  # 传入表计类型。
+                meter=primary_meter,  # 传入主表计类型。
                 report_time_range=report_time_range,  # 传入标准化时间范围。
-                summary_payload=summary_payload_python,  # 传入 python 模式摘要（修复类型检查问题）。
-                trend_payload=trend_payload_json,  # 传入趋势数据。
-                anomaly_payload=anomaly_payload_json,  # 传入异常数据。
+                summary_payload=primary_summary_payload_python,  # 传入主表计摘要（python 模式）。
+                trend_payload=primary_trend_payload_json,  # 传入主表计趋势数据。
+                anomaly_payload=primary_anomaly_payload_json,  # 传入主表计异常数据。
             )  # 完成 AI 请求构造。
             ai_response = get_report_summary(ai_request)  # 调用 AI 报表总结服务。
             ai_insight = AIInsight(  # 把 AI 响应映射为报表洞察对象。
@@ -645,8 +899,8 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
 
         summary_text = ai_insight.summary if ai_insight and ai_insight.summary else _build_rule_summary(  # 生成最终摘要文本。
             payload.report_type.value,  # 传入报表类型。
-            summary_payload_python,  # 传入摘要数据。
-            ranking_payload_json.get("items", []),  # 传入排行条目。
+            primary_summary_payload_python,  # 传入主表计摘要数据。
+            ranking_items_combined,  # 传入组合排行条目。
             anomaly_payload_json,  # 传入异常摘要。
         )  # 完成摘要文本选择。
 
@@ -664,7 +918,9 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
             "status": ReportStatus.ready.value,  # 写入报表状态。
             "time_range": report_time_range.model_dump(mode="json"),  # 写入时间范围。
             "building_id": payload.building_id,  # 写入建筑范围。
-            "meter": normalized_meter,  # 写入表计类型。
+            "meter": display_meter,  # 写入对外展示表计（多表计场景使用统一标识）。
+            "primary_meter": primary_meter,  # 写入主表计，便于前端兼容旧逻辑。
+            "analyzed_meters": analyzed_meters,  # 写入参与分析的表计列表。
             "summary": summary_text,  # 写入摘要文本。
             "generated_at": require_api_datetime(datetime.now()).isoformat(),  # 写入生成时间。
             "include_ai_summary": payload.include_ai_summary,  # 写入 AI 开关。
@@ -677,7 +933,7 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
         _persist_report(  # 持久化 ready 状态报表。
             report_id=report_id,  # 传入报表 ID。
             payload=payload,  # 传入原始请求。
-            meter=normalized_meter,  # 传入表计类型。
+            meter=display_meter,  # 传入对外展示表计。
             report_time_range=report_time_range,  # 传入时间范围。
             status=ReportStatus.ready,  # 传入 ready 状态。
             summary_text=summary_text,  # 传入摘要文本。
@@ -692,7 +948,8 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
             "status": ReportStatus.failed.value,  # 写入失败状态。
             "time_range": payload.time_range.model_dump(mode="json"),  # 写入请求时间范围。
             "building_id": payload.building_id,  # 写入建筑范围。
-            "meter": normalized_meter,  # 写入表计类型。
+            "meter": display_meter,  # 写入对外展示表计。
+            "analyzed_meters": analyzed_meters,  # 写入分析表计列表（尽量保留上下文）。
             "summary": None,  # 失败态摘要为空。
             "include_ai_summary": payload.include_ai_summary,  # 保留 AI 开关。
             "sections": [],  # 失败态分节为空。
@@ -701,7 +958,7 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
         _persist_report(  # 持久化 failed 状态报表。
             report_id=report_id,  # 传入报表 ID。
             payload=payload,  # 传入原始请求。
-            meter=normalized_meter,  # 传入表计类型。
+            meter=display_meter,  # 传入对外展示表计。
             report_time_range=payload.time_range,  # 使用请求时间范围写库。
             status=ReportStatus.failed,  # 写入 failed 状态。
             summary_text=None,  # 摘要为空。
