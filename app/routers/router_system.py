@@ -20,7 +20,7 @@ router = APIRouter(tags=["System"])  # 创建 system 分组路由对象，并统
 def get_system_health_api() -> SystemHealth:  # 定义健康检查接口处理函数。
     return get_system_health_service()  # 调用 system 业务层并返回结果。
 
-@router.get("/dataset/anomaly-progress-stream", summary="离线跑批进度推流 (SSE)")
+@router.get("/dataset/anomaly-progress", summary="离线跑批进度推流 (SSE)")
 async def anomaly_progress_stream_api(request: Request):
     """
     提供给前端用来监听离线跑批进度的接口。

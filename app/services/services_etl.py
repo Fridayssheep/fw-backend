@@ -28,6 +28,11 @@ _METADATA_INT_COLUMNS = {
     "occupants",
 }
 
+_RAW_METER_UPLOAD_CHUNK_ROWS = int(os.getenv("RAW_METER_UPLOAD_CHUNK_ROWS", "1000"))
+_METADATA_UPLOAD_CHUNK_ROWS = int(os.getenv("METADATA_UPLOAD_CHUNK_ROWS", "2000"))
+_WEATHER_UPLOAD_CHUNK_ROWS = int(os.getenv("WEATHER_UPLOAD_CHUNK_ROWS", "50000"))
+_NON_ELECTRIC_ZERO_RUN_THRESHOLD = 24
+
 
 def _ensure_indexes_after_upload(upload_type: str) -> None:
     # In incremental upload mode, tables may appear gradually.
@@ -59,20 +64,74 @@ def _normalize_metadata_frame(df_meta: pd.DataFrame) -> pd.DataFrame:
     return df_meta
 
 
+def _clean_electricity_chunk(df_chunk: pd.DataFrame) -> pd.DataFrame:
+    cleaned = df_chunk.copy()
+    value_columns = [column for column in cleaned.columns if column != "timestamp"]
+    cleaned[value_columns] = cleaned[value_columns].replace(0, np.nan)
+    return cleaned
+
+
+def _clean_non_electric_chunk(df_chunk: pd.DataFrame) -> pd.DataFrame:
+    cleaned = df_chunk.copy()
+    value_columns = [column for column in cleaned.columns if column != "timestamp"]
+    if not value_columns:
+        return cleaned
+
+    is_zero = cleaned[value_columns] == 0
+    for column in value_columns:
+        zero_series = is_zero[column]
+        if not zero_series.any():
+            continue
+        zero_groups = zero_series.ne(zero_series.shift()).cumsum()
+        group_sizes = zero_series.groupby(zero_groups).transform("size")
+        mask = zero_series & (group_sizes > _NON_ELECTRIC_ZERO_RUN_THRESHOLD)
+        cleaned.loc[mask, column] = np.nan
+    return cleaned
+
+
+def _flush_meter_chunk(df_chunk: pd.DataFrame, meter_type: str) -> int:
+    if df_chunk.empty:
+        return 0
+
+    df_long = pd.melt(
+        df_chunk,
+        id_vars=["timestamp"],
+        var_name="building_id",
+        value_name="meter_reading",
+    )
+    df_long["meter"] = meter_type
+    df_long = df_long.dropna(subset=["meter_reading"])
+    if df_long.empty:
+        return 0
+
+    row_count = len(df_long)
+    df_long.to_sql("meter_readings", engine, if_exists="append", index=False, chunksize=50000)
+    return row_count
+
+
 def process_metadata_upload(file_path: str) -> None:
     """Import and overwrite building metadata."""
     logger.info("Start processing metadata file: %s", file_path)
     try:
-        df_meta = pd.read_csv(file_path)
-        df_meta = _normalize_metadata_frame(df_meta)
-
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM building_metadata;"))
 
-        logger.info("Writing %s metadata rows...", len(df_meta))
-        df_meta.to_sql("building_metadata", engine, if_exists="append", index=False)
+        inserted_rows = 0
+        for chunk_index, df_meta in enumerate(
+            pd.read_csv(file_path, chunksize=_METADATA_UPLOAD_CHUNK_ROWS),
+            start=1,
+        ):
+            normalized_chunk = _normalize_metadata_frame(df_meta)
+            normalized_chunk.to_sql("building_metadata", engine, if_exists="append", index=False)
+            inserted_rows += len(normalized_chunk)
+            logger.info(
+                "[metadata] processed csv chunk %s, appended %s rows so far.",
+                chunk_index,
+                inserted_rows,
+            )
+
         _ensure_indexes_after_upload("metadata")
-        logger.info("Metadata import completed.")
+        logger.info("Metadata import completed. appended_rows=%s", inserted_rows)
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -82,16 +141,28 @@ def process_weather_upload(file_path: str) -> None:
     """Import and overwrite weather time-series data."""
     logger.info("Start processing weather file: %s", file_path)
     try:
-        df_weather = pd.read_csv(file_path)
-        df_weather["timestamp"] = pd.to_datetime(df_weather["timestamp"])
-
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM weather_data;"))
 
-        logger.info("Writing %s weather rows...", len(df_weather))
-        df_weather.to_sql("weather_data", engine, if_exists="append", index=False, chunksize=50000)
+        inserted_rows = 0
+        for chunk_index, df_weather in enumerate(
+            pd.read_csv(
+                file_path,
+                parse_dates=["timestamp"],
+                chunksize=_WEATHER_UPLOAD_CHUNK_ROWS,
+            ),
+            start=1,
+        ):
+            df_weather.to_sql("weather_data", engine, if_exists="append", index=False, chunksize=50000)
+            inserted_rows += len(df_weather)
+            logger.info(
+                "[weather] processed csv chunk %s, appended %s rows so far.",
+                chunk_index,
+                inserted_rows,
+            )
+
         _ensure_indexes_after_upload("weather")
-        logger.info("Weather import completed.")
+        logger.info("Weather import completed. appended_rows=%s", inserted_rows)
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -102,36 +173,57 @@ def process_raw_meter_upload(meter_type: str, file_path: str) -> None:
     logger.info("Start processing raw meter file [%s]: %s", meter_type, file_path)
     try:
         start_time = time.time()
+        inserted_rows = 0
+        chunk_index = 0
+        pending_tail: pd.DataFrame | None = None
 
-        df = pd.read_csv(file_path)
+        reader = pd.read_csv(
+            file_path,
+            parse_dates=["timestamp"],
+            chunksize=_RAW_METER_UPLOAD_CHUNK_ROWS,
+        )
 
-        if meter_type == "electricity":
-            cols = [c for c in df.columns if c != "timestamp"]
-            df[cols] = df[cols].replace(0, np.nan)
-        else:
-            cols = [c for c in df.columns if c != "timestamp"]
-            is_zero = (df[cols] == 0)
-            for col in cols:
-                if not is_zero[col].any():
-                    continue
-                s = is_zero[col]
-                zero_groups = s.ne(s.shift()).cumsum()
-                group_sizes = s.groupby(zero_groups).transform("size")
-                mask = s & (group_sizes > 24)
-                df.loc[mask, col] = np.nan
+        for raw_chunk in reader:
+            chunk_index += 1
+            combined_chunk = (
+                pd.concat([pending_tail, raw_chunk], ignore_index=True)
+                if pending_tail is not None and not pending_tail.empty
+                else raw_chunk.reset_index(drop=True)
+            )
 
-        df_long = pd.melt(df, id_vars=["timestamp"], var_name="building_id", value_name="meter_reading")
-        df_long["meter"] = meter_type
-        df_long["timestamp"] = pd.to_datetime(df_long["timestamp"])
-        df_long = df_long.dropna(subset=["meter_reading"])
+            if meter_type == "electricity":
+                cleaned_chunk = _clean_electricity_chunk(combined_chunk)
+                written = _flush_meter_chunk(cleaned_chunk, meter_type)
+                inserted_rows += written
+                pending_tail = None
+            else:
+                cleaned_chunk = _clean_non_electric_chunk(combined_chunk)
+                if len(combined_chunk) > _NON_ELECTRIC_ZERO_RUN_THRESHOLD:
+                    flush_count = len(combined_chunk) - _NON_ELECTRIC_ZERO_RUN_THRESHOLD
+                    flush_chunk = cleaned_chunk.iloc[:flush_count].copy()
+                    pending_tail = combined_chunk.iloc[flush_count:].reset_index(drop=True)
+                else:
+                    flush_chunk = cleaned_chunk.iloc[0:0].copy()
+                    pending_tail = combined_chunk.reset_index(drop=True)
 
-        total_rows = len(df_long)
-        logger.info("Clean completed. Appending %s rows into meter_readings...", total_rows)
-        df_long.to_sql("meter_readings", engine, if_exists="append", index=False, chunksize=50000)
+                written = _flush_meter_chunk(flush_chunk, meter_type)
+                inserted_rows += written
+
+            logger.info(
+                "[%s] processed csv chunk %s, appended %s normalized rows so far.",
+                meter_type,
+                chunk_index,
+                inserted_rows,
+            )
+
+        if pending_tail is not None and not pending_tail.empty:
+            cleaned_tail = _clean_non_electric_chunk(pending_tail) if meter_type != "electricity" else _clean_electricity_chunk(pending_tail)
+            inserted_rows += _flush_meter_chunk(cleaned_tail, meter_type)
+
         _ensure_indexes_after_upload(f"raw_meter:{meter_type}")
 
         cost = time.time() - start_time
-        logger.info("[%s] meter import completed. cost=%.2fs", meter_type, cost)
+        logger.info("[%s] meter import completed. appended_rows=%s cost=%.2fs", meter_type, inserted_rows, cost)
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
