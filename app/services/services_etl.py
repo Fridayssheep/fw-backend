@@ -51,6 +51,38 @@ def _normalize_numeric_series(series: pd.Series) -> pd.Series:
     return pd.to_numeric(cleaned, errors="coerce")
 
 
+def _normalize_csv_columns(df: pd.DataFrame) -> pd.DataFrame:
+    renamed_columns: dict[str, str] = {}
+    for column in df.columns:
+        normalized = str(column).replace("\ufeff", "").strip()
+        lowered = normalized.lower()
+        if lowered == "timestamp":
+            normalized = "timestamp"
+        elif lowered == "site_id":
+            normalized = "site_id"
+        renamed_columns[column] = normalized
+    return df.rename(columns=renamed_columns)
+
+
+def _ensure_required_columns(df: pd.DataFrame, required_columns: set[str], upload_type: str) -> None:
+    missing_columns = sorted(required_columns - set(df.columns))
+    if missing_columns:
+        raise ValueError(
+            f"{upload_type} CSV 缺少必需列: {', '.join(missing_columns)}。"
+            f" 当前表头: {', '.join(map(str, df.columns[:10]))}"
+        )
+
+
+def _read_csv_chunks(file_path: str, chunk_rows: int) -> pd.io.parsers.TextFileReader:
+    # utf-8-sig handles Excel/Windows generated BOM safely.
+    return pd.read_csv(
+        file_path,
+        chunksize=chunk_rows,
+        encoding="utf-8-sig",
+        skipinitialspace=True,
+    )
+
+
 def _normalize_metadata_frame(df_meta: pd.DataFrame) -> pd.DataFrame:
     for column in _METADATA_FLOAT_COLUMNS:
         if column in df_meta.columns:
@@ -118,10 +150,10 @@ def process_metadata_upload(file_path: str) -> None:
 
         inserted_rows = 0
         for chunk_index, df_meta in enumerate(
-            pd.read_csv(file_path, chunksize=_METADATA_UPLOAD_CHUNK_ROWS),
+            _read_csv_chunks(file_path, _METADATA_UPLOAD_CHUNK_ROWS),
             start=1,
         ):
-            normalized_chunk = _normalize_metadata_frame(df_meta)
+            normalized_chunk = _normalize_metadata_frame(_normalize_csv_columns(df_meta))
             normalized_chunk.to_sql("building_metadata", engine, if_exists="append", index=False)
             inserted_rows += len(normalized_chunk)
             logger.info(
@@ -132,6 +164,8 @@ def process_metadata_upload(file_path: str) -> None:
 
         _ensure_indexes_after_upload("metadata")
         logger.info("Metadata import completed. appended_rows=%s", inserted_rows)
+    except Exception:
+        logger.exception("Metadata upload failed for file: %s", file_path)
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -146,13 +180,12 @@ def process_weather_upload(file_path: str) -> None:
 
         inserted_rows = 0
         for chunk_index, df_weather in enumerate(
-            pd.read_csv(
-                file_path,
-                parse_dates=["timestamp"],
-                chunksize=_WEATHER_UPLOAD_CHUNK_ROWS,
-            ),
+            _read_csv_chunks(file_path, _WEATHER_UPLOAD_CHUNK_ROWS),
             start=1,
         ):
+            df_weather = _normalize_csv_columns(df_weather)
+            _ensure_required_columns(df_weather, {"timestamp", "site_id"}, "weather")
+            df_weather["timestamp"] = pd.to_datetime(df_weather["timestamp"], errors="raise")
             df_weather.to_sql("weather_data", engine, if_exists="append", index=False, chunksize=50000)
             inserted_rows += len(df_weather)
             logger.info(
@@ -163,6 +196,8 @@ def process_weather_upload(file_path: str) -> None:
 
         _ensure_indexes_after_upload("weather")
         logger.info("Weather import completed. appended_rows=%s", inserted_rows)
+    except Exception:
+        logger.exception("Weather upload failed for file: %s", file_path)
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -177,14 +212,13 @@ def process_raw_meter_upload(meter_type: str, file_path: str) -> None:
         chunk_index = 0
         pending_tail: pd.DataFrame | None = None
 
-        reader = pd.read_csv(
-            file_path,
-            parse_dates=["timestamp"],
-            chunksize=_RAW_METER_UPLOAD_CHUNK_ROWS,
-        )
+        reader = _read_csv_chunks(file_path, _RAW_METER_UPLOAD_CHUNK_ROWS)
 
         for raw_chunk in reader:
             chunk_index += 1
+            raw_chunk = _normalize_csv_columns(raw_chunk)
+            _ensure_required_columns(raw_chunk, {"timestamp"}, f"raw/{meter_type}")
+            raw_chunk["timestamp"] = pd.to_datetime(raw_chunk["timestamp"], errors="raise")
             combined_chunk = (
                 pd.concat([pending_tail, raw_chunk], ignore_index=True)
                 if pending_tail is not None and not pending_tail.empty
@@ -224,6 +258,8 @@ def process_raw_meter_upload(meter_type: str, file_path: str) -> None:
 
         cost = time.time() - start_time
         logger.info("[%s] meter import completed. appended_rows=%s cost=%.2fs", meter_type, inserted_rows, cost)
+    except Exception:
+        logger.exception("[%s] raw meter upload failed for file: %s", meter_type, file_path)
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)

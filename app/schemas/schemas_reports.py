@@ -34,6 +34,9 @@ class GenerateReportRequest(BaseModel):  # 定义生成报表请求模型。
 class GenerateReportResponse(BaseModel):  # 定义生成报表响应模型。
     report_id: str  # 报表 ID。
     status: ReportStatus  # 报表状态。
+    include_ai_summary: bool = False  # 是否请求 AI 参与报表生成。
+    ai_summary_applied: bool = False  # AI 总结是否实际执行。
+    ai_summary_skipped_reason: str | None = None  # AI 总结未执行时的跳过原因。
 
 
 class AIInsight(BaseModel):  # 定义报表中的 AI 洞察模型。
@@ -65,7 +68,9 @@ class ReportDetailResponse(BaseModel):  # 定义报表详情响应模型。
     summary: str | None = None  # 报表摘要文本。
     download_url: str | None = None  # 默认下载链接。
     generated_at: datetime | None = None  # 报表生成时间。
-    include_ai_summary: bool = False  # 是否包含 AI 总结。
+    include_ai_summary: bool = False  # 是否请求 AI 参与报表生成。
+    ai_summary_applied: bool = False  # AI 总结是否实际执行。
+    ai_summary_skipped_reason: str | None = None  # AI 总结未执行时的跳过原因。
     ai_insight: AIInsight | None = None  # AI 洞察结构（可空）。
     sections: list[ReportSection] = Field(default_factory=list)  # 报表分节列表。
     exports: list[ReportExport] = Field(default_factory=list)  # 可用导出格式列表。

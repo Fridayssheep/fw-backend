@@ -178,12 +178,13 @@ def _determine_trend_direction_and_rate(trend_payload: dict[str, Any]) -> tuple[
 
 def _build_ai_report_request(  # 定义构造 AI 报表请求函数。
     payload: GenerateReportRequest,  # 接收原始报表请求。
-    effective_building_id: str,  # 接收用于 AI 分析的有效建筑编号。
+    ai_context_building_id: str,  # 接收用于 AI 总结的报表范围标识。
     meter: str,  # 接收标准化表计类型。
     report_time_range: TimeRange,  # 接收标准化时间范围。
     summary_payload: dict[str, Any],  # 接收摘要数据（python 模式，保留 datetime）。
     trend_payload: dict[str, Any],  # 接收趋势数据（json 模式）。
     anomaly_payload: dict[str, Any] | None,  # 接收异常分析数据（可选）。
+    include_anomaly_insight: bool,  # 是否要求 AI 在总结时纳入异常洞察。
 ) -> AIReportSummaryRequest:  # 返回 AI 报表请求对象。
     trend_direction, trend_change_rate = _determine_trend_direction_and_rate(trend_payload)  # 先估算趋势方向和变化率。
     anomaly_snapshot = None  # 先初始化异常快照为空。
@@ -197,10 +198,10 @@ def _build_ai_report_request(  # 定义构造 AI 报表请求函数。
     return AIReportSummaryRequest(  # 构造 AI 报表请求对象。
         report_type=AI_REPORT_TYPE_MAP.get(payload.report_type.value, "summary_card"),  # 传入映射后的 AI 报表类型。
         audience="manager",  # 固定受众为管理者视角。
-        include_anomaly_insight=bool(payload.include_ai_summary),  # 按请求决定是否要求异常洞察。
+        include_anomaly_insight=include_anomaly_insight,  # 按当前报表口径决定是否要求异常洞察。
         include_actions=False,  # 当前报表接口不返回动作建议按钮。
         context=AIReportSummaryContextInput(  # 构造 AI 上下文。
-            building_id=effective_building_id,  # 写入建筑编号。
+            building_id=ai_context_building_id,  # 写入报表范围标识。
             meter=meter,  # 写入表计类型。
             time_range=report_time_range,  # 写入时间范围。
             metrics_snapshot=AIReportSummaryMetricsSnapshotInput(  # 构造指标快照。
@@ -664,7 +665,7 @@ def _persist_report(  # 定义报表持久化函数。
             "meter": meter,  # 传入表计参数。
             "time_start": report_time_range.start,  # 传入开始时间参数。
             "time_end": report_time_range.end,  # 传入结束时间参数。
-            "include_ai_summary": payload.include_ai_summary,  # 传入 AI 开关参数。
+            "include_ai_summary": payload.include_ai_summary,  # 传入请求侧 AI 开关参数。
             "summary": summary_text,  # 传入摘要文本参数。
             "report_json": json.dumps(report_payload, ensure_ascii=False),  # 序列化报表 JSON 参数。
             "export_markdown": export_markdown,  # 传入 Markdown 导出内容参数。
@@ -678,6 +679,8 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
     fallback_meter = normalize_meter(DEFAULT_REPORT_METER)  # 先定义默认回退表计，避免异常分支丢失上下文。
     display_meter = fallback_meter  # 初始化对外展示表计字段。
     analyzed_meters: list[str] = [fallback_meter]  # 初始化参与分析的表计列表。
+    ai_summary_applied = False  # 标记 AI 总结是否实际执行。
+    ai_summary_skipped_reason: str | None = "not_requested" if not payload.include_ai_summary else None  # 记录 AI 总结未执行原因。
     try:  # 开始报表生成主流程。
         resolved_start, resolved_end = resolve_time_range(  # 按请求条件补齐时间范围。
             payload.time_range.start,  # 传入请求开始时间。
@@ -695,6 +698,9 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
         analyzed_meters = _sort_report_meters(analyzed_meters)  # 对参与分析的表计做稳定排序。
         primary_meter = _select_primary_meter(analyzed_meters)  # 选择主展示表计（用于兼容旧结构与 AI 摘要）。
         display_meter = primary_meter if len(analyzed_meters) == 1 else REPORT_MULTI_METER_LABEL  # 多表计时改用统一标识。
+        single_building_mode = bool(payload.building_id)  # 多建筑报表只保留聚合口径，不混入单楼诊断。
+        if payload.include_ai_summary and not single_building_mode:
+            ai_summary_skipped_reason = "multi_building_anomaly_insight_disabled"  # 多建筑报表禁用单楼异常洞察，但仍允许聚合 AI 总结。
 
         building_filters = [payload.building_id] if payload.building_id else None  # 预先构造建筑过滤条件。
         summary_by_meter_json: list[dict[str, Any]] = []  # 初始化分表计摘要列表。
@@ -704,7 +710,6 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
         primary_summary_payload_python: dict[str, Any] = {}  # 初始化主表计 python 摘要。
         primary_summary_payload_json: dict[str, Any] = {}  # 初始化主表计 json 摘要。
         primary_trend_payload_json: dict[str, Any] = {}  # 初始化主表计趋势数据。
-        primary_ranking_items: list[dict[str, Any]] = []  # 初始化主表计排行条目。
 
         for current_meter in analyzed_meters:  # 遍历每个需要分析的表计。
             summary_model = build_summary(  # 计算当前表计摘要。
@@ -757,15 +762,8 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
                 ranking_items_combined.append(normalized_ranking_item)  # 追加到组合排行列表。
                 meter_ranking_items.append(normalized_ranking_item)  # 追加到当前表计排行列表。
             ranking_by_meter.append({"meter": current_meter, "items": meter_ranking_items})  # 写入按表计分组排行结果。
-            if current_meter == primary_meter:  # 如果当前是主表计，
-                primary_ranking_items = meter_ranking_items  # 记录主表计排行列表。
 
-        effective_building_id = payload.building_id  # 先使用请求中的建筑编号。
-        if not effective_building_id:  # 如果请求未指定建筑，
-            if primary_ranking_items:  # 优先尝试主表计排行数据，
-                effective_building_id = primary_ranking_items[0].get("building_id")  # 取主表计 Top1 建筑作为分析目标。
-            elif ranking_items_combined:  # 如果主表计排行为空但组合排行有数据，
-                effective_building_id = ranking_items_combined[0].get("building_id")  # 回退到组合排行首条建筑。
+        effective_building_id = payload.building_id  # 只有单建筑报表才允许进入单楼口径的后续分析。
 
         anomaly_payload_json: dict[str, Any] | None = None  # 先初始化异常节为空。
         weather_payload_json: dict[str, Any] | None = None  # 先初始化天气节为空。
@@ -878,15 +876,17 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
         )  # 完成分节构造。
 
         ai_insight: AIInsight | None = None  # 先初始化 AI 洞察为空。
-        if payload.include_ai_summary and effective_building_id:  # 如果请求启用了 AI 且存在有效建筑，
+        if payload.include_ai_summary:  # 只要请求了 AI，就尝试基于当前报表素材生成总结。
+            ai_context_building_id = effective_building_id or "多建筑汇总"
             ai_request = _build_ai_report_request(  # 构造 AI 报表请求。
                 payload=payload,  # 传入原始报表请求。
-                effective_building_id=effective_building_id,  # 传入有效建筑编号。
-                meter=primary_meter,  # 传入主表计类型。
+                ai_context_building_id=ai_context_building_id,  # 传入报表范围标识。
+                meter=display_meter,  # 传入当前报表展示表计类型。
                 report_time_range=report_time_range,  # 传入标准化时间范围。
                 summary_payload=primary_summary_payload_python,  # 传入主表计摘要（python 模式）。
                 trend_payload=primary_trend_payload_json,  # 传入主表计趋势数据。
                 anomaly_payload=primary_anomaly_payload_json,  # 传入主表计异常数据。
+                include_anomaly_insight=single_building_mode and primary_anomaly_payload_json is not None,  # 仅单建筑报表纳入异常洞察。
             )  # 完成 AI 请求构造。
             ai_response = get_report_summary(ai_request)  # 调用 AI 报表总结服务。
             ai_insight = AIInsight(  # 把 AI 响应映射为报表洞察对象。
@@ -896,6 +896,8 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
                 risks=ai_response.risks,  # 写入风险列表。
                 suggestions=[item.label for item in ai_response.suggestions],  # 提取建议文案。
             )  # 完成 AI 洞察对象构造。
+            ai_summary_applied = True  # 记录本次报表已执行 AI 总结。
+            ai_summary_skipped_reason = None  # AI 已执行，无需跳过原因。
 
         summary_text = ai_insight.summary if ai_insight and ai_insight.summary else _build_rule_summary(  # 生成最终摘要文本。
             payload.report_type.value,  # 传入报表类型。
@@ -923,7 +925,9 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
             "analyzed_meters": analyzed_meters,  # 写入参与分析的表计列表。
             "summary": summary_text,  # 写入摘要文本。
             "generated_at": require_api_datetime(datetime.now()).isoformat(),  # 写入生成时间。
-            "include_ai_summary": payload.include_ai_summary,  # 写入 AI 开关。
+            "include_ai_summary": payload.include_ai_summary,  # 写入请求侧 AI 开关。
+            "ai_summary_applied": ai_summary_applied,  # 写入 AI 总结执行结果。
+            "ai_summary_skipped_reason": ai_summary_skipped_reason,  # 写入 AI 总结跳过原因。
             "ai_insight": ai_insight.model_dump(mode="json") if ai_insight else None,  # 写入 AI 洞察（可空）。
             "sections": [section.model_dump(mode="json") for section in sections],  # 写入分节列表。
             "exports": [item.model_dump(mode="json") for item in exports],  # 写入导出描述。
@@ -940,8 +944,16 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
             report_payload=report_payload,  # 传入报表 JSON。
             export_markdown=export_markdown,  # 传入 md 导出内容。
         )  # 完成持久化。
-        return GenerateReportResponse(report_id=report_id, status=ReportStatus.ready)  # 返回生成成功响应。
+        return GenerateReportResponse(
+            report_id=report_id,
+            status=ReportStatus.ready,
+            include_ai_summary=payload.include_ai_summary,
+            ai_summary_applied=ai_summary_applied,
+            ai_summary_skipped_reason=ai_summary_skipped_reason,
+        )  # 返回生成成功响应。
     except Exception as exc:  # noqa: BLE001  # 如果主流程异常，进入失败兜底。
+        if payload.include_ai_summary and ai_summary_skipped_reason is None:
+            ai_summary_skipped_reason = "report_generation_failed"  # 若整体失败，则补上失败原因。
         fallback_payload = {  # 组装失败态报表 JSON。
             "report_id": report_id,  # 写入报表 ID。
             "report_type": payload.report_type.value,  # 写入报表类型。
@@ -951,7 +963,9 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
             "meter": display_meter,  # 写入对外展示表计。
             "analyzed_meters": analyzed_meters,  # 写入分析表计列表（尽量保留上下文）。
             "summary": None,  # 失败态摘要为空。
-            "include_ai_summary": payload.include_ai_summary,  # 保留 AI 开关。
+            "include_ai_summary": payload.include_ai_summary,  # 保留请求侧 AI 开关。
+            "ai_summary_applied": ai_summary_applied,  # 保留 AI 总结执行结果。
+            "ai_summary_skipped_reason": ai_summary_skipped_reason,  # 保留 AI 总结跳过原因。
             "sections": [],  # 失败态分节为空。
             "download_url": _build_download_url(report_id, base_url),  # 仍保留下载地址字段。
         }  # 完成失败态 JSON 组装。
@@ -966,7 +980,13 @@ def generate_report(payload: GenerateReportRequest, base_url: str | None = None)
             export_markdown=None,  # 失败态没有导出内容。
             error_message=str(exc),  # 写入错误信息。
         )  # 完成失败态持久化。
-        return GenerateReportResponse(report_id=report_id, status=ReportStatus.failed)  # 返回失败响应。
+        return GenerateReportResponse(
+            report_id=report_id,
+            status=ReportStatus.failed,
+            include_ai_summary=payload.include_ai_summary,
+            ai_summary_applied=ai_summary_applied,
+            ai_summary_skipped_reason=ai_summary_skipped_reason,
+        )  # 返回失败响应。
 
 
 def get_report_detail(report_id: str, base_url: str | None = None) -> ReportDetailResponse:  # 定义查询报表详情函数。
@@ -1026,7 +1046,9 @@ def get_report_detail(report_id: str, base_url: str | None = None) -> ReportDeta
         summary=row.get("summary") or report_json.get("summary"),  # 写入摘要文本。
         download_url=_build_download_url(report_id, base_url),  # 写入默认下载链接。
         generated_at=to_api_datetime(row.get("created_at")),  # 写入生成时间。
-        include_ai_summary=bool(row.get("include_ai_summary")),  # 写入 AI 开关。
+        include_ai_summary=bool(row.get("include_ai_summary")),  # 写入请求侧 AI 开关。
+        ai_summary_applied=bool(report_json.get("ai_summary_applied")),  # 写入 AI 总结执行结果。
+        ai_summary_skipped_reason=report_json.get("ai_summary_skipped_reason"),  # 写入 AI 总结跳过原因。
         ai_insight=ai_insight,  # 写入 AI 洞察对象。
         sections=section_items,  # 写入分节列表。
         exports=export_items,  # 写入导出描述列表。
