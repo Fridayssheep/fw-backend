@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from time import perf_counter
 from typing import Any
@@ -11,7 +11,7 @@ from app.schemas import AIReportSummaryMeta
 from app.schemas import AIReportSummaryRequest
 from app.schemas import AIReportSummaryResponse
 from app.schemas import AIReportSummarySuggestion
-from app.services.service_common import get_taipei_now
+from app.services.service_common import get_timezone_now
 
 from .anomaly_service import analyze_anomaly_with_ai
 from .config import get_ai_settings
@@ -114,7 +114,7 @@ def _build_report_context(payload: AIReportSummaryRequest, anomaly_result: Any |
             status=anomaly_result.status if anomaly_result else "low_confidence",
             candidate_cause_titles=[item.title for item in anomaly_result.candidate_causes[:3]] if anomaly_result else [],
         ),
-        generated_at=get_taipei_now(),
+        generated_at=get_timezone_now(),
     )
 
 
@@ -398,7 +398,7 @@ def _build_fallback_response(
         evidence=_build_evidence(report_context, anomaly_result),
         actions=_build_actions(payload, anomaly_result),
         meta=AIReportSummaryMeta(
-            generated_at=get_taipei_now(),
+            generated_at=get_timezone_now(),
             model=settings_model,
             report_type=report_context.report_type,
             audience=report_context.audience,
@@ -445,7 +445,7 @@ def get_report_summary(payload: AIReportSummaryRequest) -> AIReportSummaryRespon
             evidence=_build_evidence(report_context, anomaly_result),
             actions=_build_actions(payload, anomaly_result),
             meta=AIReportSummaryMeta(
-                generated_at=get_taipei_now(),
+                generated_at=get_timezone_now(),
                 model=settings.llm_model,
                 report_type=report_context.report_type,
                 audience=report_context.audience,

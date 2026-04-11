@@ -58,9 +58,29 @@ class RuntimeAISettingsResponse(RuntimeAISettingsPayload):
     config_path: str
 
 
+class RuntimeLLMSettingsUpdate(BaseModel):
+    base_url: str = Field(default="")
+    api_key: str = Field(default="")
+    api_key_configured: bool | None = Field(default=None)
+    model: str = Field(default="")
+    timeout_seconds: float = Field(default=420)
+    temperature: float = Field(default=0.2)
+    top_p: float = Field(default=0.9)
+
+
+class RuntimeRagFlowSettingsUpdate(BaseModel):
+    api_url: str = Field(default="")
+    api_key: str = Field(default="")
+    api_key_configured: bool | None = Field(default=None)
+    timeout_seconds: float = Field(default=60)
+    chat_model: str = Field(default="")
+    dataset_ids: list[str] = Field(default_factory=list)
+    default_chat_id: str = Field(default="")
+
+
 class RuntimeAISettingsUpdateRequest(BaseModel):
-    llm: RuntimeLLMSettings
-    ragflow: RuntimeRagFlowSettings
+    llm: RuntimeLLMSettingsUpdate
+    ragflow: RuntimeRagFlowSettingsUpdate
     features: RuntimeAIFeatureSettings
 
 

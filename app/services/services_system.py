@@ -14,7 +14,7 @@ from app.schemas.schemas_system import SystemCurrentTimeResponse
 from app.schemas.schemas_system import SystemHealth
 
 from .service_common import get_app_timezone_name
-from .service_common import get_taipei_now
+from .service_common import get_timezone_now
 from .service_common import resolve_effective_current_time
 
 
@@ -23,7 +23,7 @@ def get_system_health() -> SystemHealth:
     return SystemHealth(
         status="ok",
         database="ok",
-        timestamp=get_taipei_now(),
+        timestamp=get_timezone_now(),
     )
 
 

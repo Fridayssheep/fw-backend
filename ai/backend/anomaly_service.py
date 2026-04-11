@@ -14,7 +14,7 @@ from app.schemas import AIEvidenceItem
 from app.schemas import AIFeedbackPrompt
 from app.schemas import EnergyAnomalyAnalysisRequest
 from app.schemas import WeatherCorrelationResponse
-from app.services.service_common import get_taipei_now
+from app.services.service_common import get_timezone_now
 from app.services.services_anomaly import get_energy_anomaly_analysis
 from app.services.services_energy import get_energy_weather_correlation
 
@@ -433,7 +433,7 @@ def _build_fallback_response(
 ) -> AIAnalyzeAnomalyResponse:
     """在 LLM 不可用或输出非法时，构造可落地的兜底响应。"""
     analysis_id = _build_analysis_id()
-    generated_at = get_taipei_now()
+    generated_at = get_timezone_now()
     candidate_causes = _build_default_candidate_causes(
         anomaly_result=anomaly_result,
         weather_result=weather_result,
@@ -485,7 +485,7 @@ def _normalize_llm_response(
 ) -> AIAnalyzeAnomalyResponse:
     """将 LLM 原始 JSON 归一化为后端响应模型。"""
     analysis_id = _build_analysis_id()
-    generated_at = get_taipei_now()
+    generated_at = get_timezone_now()
     candidate_causes = _coerce_candidate_causes(llm_response.get("candidate_causes"), request.max_candidate_causes)
     evidence = _coerce_evidence(llm_response.get("evidence")) or _build_default_evidence(
         anomaly_result, weather_result, history_context

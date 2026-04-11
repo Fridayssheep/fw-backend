@@ -311,6 +311,6 @@ def get_building_energy_summary(  # 定义建筑级能耗摘要接口业务函�
     summary = build_summary(effective_meter, resolved_start, resolved_end, [building_id], None)  # 复用既有 energy 摘要逻辑计算当前建筑摘要。
     return EnergySummaryResponse(  # 构造并返回建筑级能耗摘要响应。
         building_id=building_id,  # 写入建筑编号字段。
-        time_range=build_api_time_range(resolved_start, resolved_end),  # 写入带台湾时区的时间范围字段。
+        time_range=build_api_time_range(resolved_start, resolved_end),  # 写入带时区的时间范围字段。
         summary=summary,  # 写入能耗摘要字段。
     )  # 完成建筑级能耗摘要响应构造。

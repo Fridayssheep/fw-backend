@@ -4,7 +4,7 @@ import re  # 导入正则库，方便兼容浏览器地址栏里未转义的时�
 from datetime import datetime  # 导入日期时间类型，方便做时间计算。
 from datetime import timedelta  # 导入时间差类型，方便补默认时间范围。
 from typing import Any  # 导入任意类型注解，方便描述松散结构。
-from zoneinfo import ZoneInfo  # 导入时区对象，方便统一转换到台湾标准时间。
+from zoneinfo import ZoneInfo  # 导入时区对象，方便统一转换到UTC+8标准时间。
 
 from app.core.database import build_in_clause  # 导入 IN 条件构造工具函数。
 from app.core.database import fetch_scalar  # 导入单值查询函数。
@@ -33,7 +33,6 @@ GRANULARITY_MAP = {  # 定义允许使用的时间粒度映射表。
 
 APP_TIMEZONE_NAME = os.getenv("APP_TIMEZONE", "Asia/Shanghai")
 APP_TZ = ZoneInfo(APP_TIMEZONE_NAME)
-TAIPEI_TZ = APP_TZ  # 兼容旧常量名，避免大范围改动。
 
 
 class ResourceNotFoundError(Exception):  # 定义资源不存在异常。
@@ -64,7 +63,7 @@ def get_app_now(timezone: str | None = None) -> datetime:
     return datetime.now(resolve_timezone(timezone))
 
 
-def get_taipei_now() -> datetime:  # 兼容旧调用点，内部统一走应用默认时区。
+def get_timezone_now() -> datetime:  # 兼容旧调用点，内部统一走应用默认时区。
     return get_app_now()
 
 
@@ -127,29 +126,29 @@ def to_db_datetime(value: datetime | str | None) -> datetime | None:  # 定义�
     if value is None:  # 如果调用方没有传时间，
         return None  # 就直接返回空。
     if value.tzinfo is None:  # 如果传入的是无时区时间，
-        return value  # 就按台湾本地时间原样使用。
-    return value.astimezone(APP_TZ).replace(tzinfo=None)  # 如果传入的是带时区时间，就先转成台湾时间再去掉时区后查询数据库。
+        return value  # 就按UTC+8本地时间原样使用。
+    return value.astimezone(APP_TZ).replace(tzinfo=None)  # 如果传入的是带时区时间，就先转成UTC+8时间再去掉时区后查询数据库。
 
 
 def to_api_datetime(value: datetime | None) -> datetime | None:  # 定义把数据库时间转换成接口输出时间的函数。
     if value is None:  # 如果当前时间为空，
         return None  # 就直接返回空。
     if value.tzinfo is None:  # 如果数据库返回的是无时区时间，
-        return value.replace(tzinfo=APP_TZ)  # 就补上台湾标准时间时区信息。
-    return value.astimezone(APP_TZ)  # 如果已经带时区，就统一转成台湾标准时间。
+        return value.replace(tzinfo=APP_TZ)  # 就补上UTC+8标准时间时区信息。
+    return value.astimezone(APP_TZ)  # 如果已经带时区，就统一转成UTC+8标准时间。
 
 
 def require_api_datetime(value: datetime) -> datetime:  # 定义把必定存在的数据库时间转换成接口输出时间的函数。
-    converted_value = to_api_datetime(value)  # 先复用通用转换函数把时间转成台湾标准时间。
+    converted_value = to_api_datetime(value)  # 先复用通用转换函数把时间转成UTC+8标准时间。
     if converted_value is None:  # 如果理论上必填的时间却变成了空值，
         raise ValueError("时间字段不能为空")  # 就直接抛错，避免静默返回非法数据。
-    return converted_value  # 返回已经确认非空的台湾标准时间。
+    return converted_value  # 返回已经确认非空的UTC+8标准时间。
 
 
 def build_api_time_range(start_time: datetime, end_time: datetime) -> TimeRange:  # 定义构造带时区时间范围对象的函数。
     return TimeRange(  # 返回时间范围对象。
-        start=require_api_datetime(start_time),  # 把开始时间转成台湾标准时间。
-        end=require_api_datetime(end_time),  # 把结束时间转成台湾标准时间。
+        start=require_api_datetime(start_time),  # 把开始时间转成UTC+8标准时间。
+        end=require_api_datetime(end_time),  # 把结束时间转成UTC+8标准时间。
     )  # 完成时间范围对象创建。
 
 
@@ -179,7 +178,7 @@ def get_latest_timestamp(  # 定义获取最新时间的函数。
         """,
         params,
     )  # 执行最大时间查询。
-    return latest_timestamp or get_app_now().replace(tzinfo=None)  # 如果查不到数据，就退回当前台湾时间的无时区版本。
+    return latest_timestamp or get_app_now().replace(tzinfo=None)  # 如果查不到数据，就退回当前UTC+8时间的无时区版本。
 
 
 def resolve_time_range(  # 定义补齐时间范围的函数。

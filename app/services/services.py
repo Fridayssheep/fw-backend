@@ -2,7 +2,7 @@
 # 当前文件不再放业务实现，只负责汇总各领域服务函数。
 
 from .service_common import ResourceNotFoundError  # 导出资源不存在异常，兼容旧引用。
-from .service_common import get_taipei_now  # 导出获取台湾时间的函数，兼容旧引用。
+from .service_common import get_timezone_now  # 导出获取UTC+8时间的函数，兼容旧引用。
 from .services_buildings import get_building_detail  # 导出建筑详情业务函数，兼容旧引用。
 from .services_buildings import get_building_energy_summary  # 导出建筑级能耗摘要业务函数，兼容旧引用。
 from .services_buildings import get_buildings  # 导出建筑列表业务函数，兼容旧引用。
@@ -47,5 +47,5 @@ __all__ = [  # 定义兼容导出列表。
     "get_energy_trend",  # 导出能耗趋势业务函数。
     "get_energy_weather_correlation",  # 导出天气相关性业务函数。
     "get_system_health",  # 导出健康检查业务函数。
-    "get_taipei_now",  # 导出获取台湾时间的函数。
+    "get_timezone_now",  # 导出获取UTC+8时间的函数。
 ]  # 结束兼容导出列表定义。

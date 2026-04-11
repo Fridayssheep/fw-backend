@@ -10,7 +10,7 @@ from app.schemas import AnomalyFeedbackRequest
 from app.schemas import AnomalyFeedbackResponse
 from app.schemas import CandidateFeedbackItem
 from app.schemas import SelectedCauseSummary
-from app.services.service_common import get_taipei_now
+from app.services.service_common import get_timezone_now
 
 
 VALID_RESOLUTION_STATUS = {
@@ -63,7 +63,7 @@ def submit_anomaly_feedback(payload: AnomalyFeedbackRequest) -> AnomalyFeedbackR
 
     candidate_feedbacks = _normalize_candidate_feedbacks(payload)
     feedback_id = str(uuid4())
-    created_at = get_taipei_now()
+    created_at = get_timezone_now()
 
     upsert_feedback_sql = text(
         """

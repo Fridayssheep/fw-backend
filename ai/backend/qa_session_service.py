@@ -9,7 +9,7 @@ from sqlalchemy import text
 from app.core.database import engine
 from app.schemas import AIQAContext
 from app.schemas import AIQAResponse
-from app.services.service_common import get_taipei_now
+from app.services.service_common import get_timezone_now
 
 
 MAX_QA_HISTORY_MESSAGES = 6
@@ -213,8 +213,8 @@ def get_or_create_session(session_id: str | None, request_context: AIQAContext |
                 "session_id": new_session_id,
                 "title": None,
                 "sticky_context_json": json.dumps(sticky_context, ensure_ascii=False),
-                "created_at": get_taipei_now(),
-                "updated_at": get_taipei_now(),
+                "created_at": get_timezone_now(),
+                "updated_at": get_timezone_now(),
             },
         )
     return QAChatSession(
@@ -294,7 +294,7 @@ def save_user_message(session_id: str, question: str, context: AIQAContext | Non
                 "session_id": session_id,
                 "content": _strip_null_chars_from_text(question),
                 "context_json": _safe_json_dumps(_context_to_dict(context)),
-                "created_at": get_taipei_now(),
+                "created_at": get_timezone_now(),
             },
         )
 
@@ -338,7 +338,7 @@ def save_assistant_message(session_id: str, response: AIQAResponse, context: AIQ
                 "references_json": _safe_json_dumps(response.references.model_dump(mode="json")),
                 "used_tools_json": _safe_json_dumps([item.model_dump(mode="json") for item in response.used_tools]),
                 "suggested_actions_json": _safe_json_dumps([item.model_dump(mode="json") for item in response.suggested_actions]),
-                "created_at": get_taipei_now(),
+                "created_at": get_timezone_now(),
             },
         )
 
@@ -368,7 +368,7 @@ def update_session_state(
                 "title": _build_session_title(latest_question),
                 "sticky_context_json": _safe_json_dumps(_context_to_dict(context)),
                 "last_question_type": response.question_type,
-                "updated_at": get_taipei_now(),
+                "updated_at": get_timezone_now(),
             },
         )
 
@@ -409,7 +409,7 @@ def save_error_message(session_id: str, error_message: str, context: AIQAContext
                 "session_id": session_id,
                 "content": _strip_null_chars_from_text(error_message),
                 "context_json": _safe_json_dumps(_context_to_dict(context)),
-                "created_at": get_taipei_now(),
+                "created_at": get_timezone_now(),
             },
         )
 
@@ -438,6 +438,6 @@ def update_session_failure_state(
                 "session_id": session_id,
                 "title": _build_session_title(latest_question),
                 "sticky_context_json": _safe_json_dumps(_context_to_dict(context)),
-                "updated_at": get_taipei_now(),
+                "updated_at": get_timezone_now(),
             },
         )

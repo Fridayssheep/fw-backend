@@ -110,7 +110,7 @@ def map_energy_rows_to_points(rows: list[dict[str, Any]]) -> list[EnergyPoint]: 
     for row in rows:  # 遍历数据库返回的每一行。
         points.append(  # 把当前行转成 EnergyPoint 模型并追加进列表。
             EnergyPoint(  # 创建一个能耗点对象。
-                timestamp=require_api_datetime(row["timestamp"]),  # 把数据库时间转成台湾标准时间后写入时间字段。
+                timestamp=require_api_datetime(row["timestamp"]),  # 把数据库时间转成UTC+8标准时间后写入时间字段。
                 building_id=row.get("building_id"),  # 写入建筑编号字段。
                 meter=row.get("meter"),  # 写入表计类型字段。
                 value=float(row["value"] or 0),  # 写入能耗值字段，并把空值转成 0。
@@ -157,7 +157,7 @@ def build_summary(  # 定义构造摘要对象的函数。
         total=round(float(summary_row["total"] or 0), 4),  # 写入总量并做简单保留小数。
         average=round(float(summary_row["average"] or 0), 4),  # 写入均值并做简单保留小数。
         peak=round(float(summary_row["peak"] or 0), 4),  # 写入峰值并做简单保留小数。
-        peak_time=to_api_datetime(peak_row["timestamp"]) if peak_row else None,  # 如果有峰值时间就转成台湾标准时间后写入，否则返回空。
+        peak_time=to_api_datetime(peak_row["timestamp"]) if peak_row else None,  # 如果有峰值时间就转成UTC+8标准时间后写入，否则返回空。
         unit=get_meter_unit(meter),  # 根据表计类型补单位。
     )  # 完成摘要对象构造。
 
@@ -323,7 +323,7 @@ def get_energy_trend(  # 定义趋势接口业务函数。
         key = (row.get("building_id"), row.get("meter") or normalized_meter)  # 生成当前序列的分组键。
         grouped_points[key].append(  # 把当前点位追加到对应序列里。
             EnergyPoint(  # 创建能耗点对象。
-                timestamp=require_api_datetime(row["timestamp"]),  # 把数据库时间转成台湾标准时间后写入时间字段。
+                timestamp=require_api_datetime(row["timestamp"]),  # 把数据库时间转成UTC+8标准时间后写入时间字段。
                 building_id=row.get("building_id"),  # 写入建筑字段。
                 meter=row.get("meter") or normalized_meter,  # 写入表计类型字段。
                 value=float(row["value"] or 0),  # 写入聚合后的数值字段。
@@ -340,7 +340,7 @@ def get_energy_trend(  # 定义趋势接口业务函数。
             )  # 完成当前序列对象创建。
         )  # 完成当前序列追加。
     return EnergyTrendResponse(  # 构造并返回趋势响应对象。
-        time_range=build_api_time_range(resolved_start, resolved_end),  # 写入带台湾时区的最终时间范围。
+        time_range=build_api_time_range(resolved_start, resolved_end),  # 写入带UTC+8时区的最终时间范围。
         series=series_list,  # 写入所有趋势序列。
     )  # 完成趋势响应构造。
 
@@ -462,7 +462,7 @@ def get_energy_cop(  # 定义 COP 查询接口业务函数。
         if electricity_value <= 0 or chilledwater_value <= 0:  # 如果任意一方没有值，就跳过当前时间桶。
             continue  # 直接处理下一条。
         cop_value = chilledwater_value / electricity_value  # 用冷冻水表值除以电表值，做一个演示版估算 COP。
-        cop_points.append(CopPoint(timestamp=require_api_datetime(bucket_time), cop=round(cop_value, 4)))  # 把当前 COP 点转成台湾标准时间后写进列表。
+        cop_points.append(CopPoint(timestamp=require_api_datetime(bucket_time), cop=round(cop_value, 4)))  # 把当前 COP 点转成UTC+8标准时间后写进列表。
     cop_values = [point.cop for point in cop_points]  # 取出所有 COP 数值，方便后面算摘要。
     if cop_values:  # 如果有有效 COP 点，
         summary = CopSummary(  # 就生成真实摘要。
@@ -482,7 +482,7 @@ def get_energy_cop(  # 定义 COP 查询接口业务函数。
         )  # 完成兜底摘要创建。
     return CopAnalysisResponse(  # 构造并返回 COP 响应。
         building_id=str(resolved_building_id),  # 写入建筑编号字段。
-        time_range=build_api_time_range(resolved_start, resolved_end),  # 写入带台湾时区的时间范围字段。
+        time_range=build_api_time_range(resolved_start, resolved_end),  # 写入带UTC+8时区的时间范围字段。
         points=cop_points,  # 写入 COP 点位字段。
         summary=summary,  # 写入 COP 摘要字段。
     )  # 完成 COP 响应构造。
@@ -588,7 +588,7 @@ def get_weather_context(  # 定义查询天气上下文的函数。
     )  # 执行天气上下文查询。
     return [  # 把数据库结果转成天气点模型列表。
         WeatherPoint(  # 创建天气点对象。
-            timestamp=require_api_datetime(row["timestamp"]),  # 把数据库时间转成台湾标准时间后写入时间字段。
+            timestamp=require_api_datetime(row["timestamp"]),  # 把数据库时间转成UTC+8标准时间后写入时间字段。
             air_temperature=row.get("air_temperature"),  # 写入气温字段。
             dew_temperature=row.get("dew_temperature"),  # 写入露点温度字段。
             wind_speed=row.get("wind_speed"),  # 写入风速字段。

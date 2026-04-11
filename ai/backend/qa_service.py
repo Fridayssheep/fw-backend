@@ -18,7 +18,7 @@ from app.services.services_energy import get_energy_query
 from app.services.services_energy import get_energy_rankings
 from app.services.services_energy import get_energy_trend
 from app.services.services_energy import get_energy_weather_correlation
-from app.services.service_common import get_taipei_now
+from app.services.service_common import get_timezone_now
 from app.services.service_common import resolve_request_current_time
 from ai.mcp.formatters import _summarize_energy_compare
 from ai.mcp.formatters import _summarize_energy_query
@@ -206,7 +206,7 @@ def _build_meta(settings_model: str, used_tools: list[AIUsedToolItem], reference
     return AIQAMeta(
         provider="orchestrated",
         model=settings_model,
-        generated_at=get_taipei_now(),
+        generated_at=get_timezone_now(),
         used_tools_count=len(used_tools),
         has_references=has_references,
         stage_timings_ms={},

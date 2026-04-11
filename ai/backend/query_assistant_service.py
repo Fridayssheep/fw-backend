@@ -14,7 +14,7 @@ from app.schemas import AIQueryAssistantUIPatch
 from app.schemas import AIQueryIntent
 from app.schemas import TimeRange
 from app.services.service_common import build_api_time_range
-from app.services.service_common import get_taipei_now
+from app.services.service_common import get_timezone_now
 from app.services.service_common import normalize_granularity
 from app.services.service_common import normalize_meter
 from app.services.service_common import resolve_request_current_time
@@ -530,7 +530,7 @@ def _normalize_llm_result(
         ui_patch=_build_ui_patch(endpoint, intent),
         warnings=warnings,
         meta=AIQueryAssistantMeta(
-            generated_at=get_taipei_now(),
+            generated_at=get_timezone_now(),
             model=settings_model,
             used_fallback=False,
         ),
@@ -557,7 +557,7 @@ def _build_fallback_response(
         ui_patch=_build_ui_patch(endpoint, fallback_intent),
         warnings=fallback_warnings,
         meta=AIQueryAssistantMeta(
-            generated_at=get_taipei_now(),
+            generated_at=get_timezone_now(),
             model=settings_model,
             used_fallback=True,
         ),
