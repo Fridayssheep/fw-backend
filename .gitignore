@@ -63,6 +63,7 @@ building-data-genome-project-2/data/**/*.csv
 docker/pgdata/
 data/
 ragflow/
+docker/ai_settings.json
 
 # post test doc
 *.http

@@ -11,7 +11,7 @@ from app.schemas import AIReportSummaryMeta
 from app.schemas import AIReportSummaryRequest
 from app.schemas import AIReportSummaryResponse
 from app.schemas import AIReportSummarySuggestion
-from app.services.service_common import get_taipei_now
+from app.services.service_common import get_timezone_now
 
 from .anomaly_service import analyze_anomaly_with_ai
 from .config import get_ai_settings
@@ -114,7 +114,7 @@ def _build_report_context(payload: AIReportSummaryRequest, anomaly_result: Any |
             status=anomaly_result.status if anomaly_result else "low_confidence",
             candidate_cause_titles=[item.title for item in anomaly_result.candidate_causes[:3]] if anomaly_result else [],
         ),
-        generated_at=get_taipei_now(),
+        generated_at=get_timezone_now(),
     )
 
 
@@ -309,14 +309,12 @@ def _default_suggestions(report_context: ReportContext, anomaly_result: Any | No
     return suggestions[:3]
 
 
-def _build_actions(payload: AIReportSummaryRequest, anomaly_result: Any | None, allowed_targets: tuple[str, ...]) -> list[AIReportSummaryAction]:
+def _build_actions(payload: AIReportSummaryRequest, anomaly_result: Any | None) -> list[AIReportSummaryAction]:
     if not payload.include_actions:
         return []
-    allowed = set(allowed_targets)
     actions: list[AIReportSummaryAction] = []
-    if "energy_trend" in allowed:
-        actions.append(AIReportSummaryAction(label="查看趋势图", action_type="open_page", target="energy_trend"))
-    if anomaly_result and "energy_anomaly_analysis" in allowed:
+    actions.append(AIReportSummaryAction(label="查看趋势图", action_type="open_page", target="energy_trend"))
+    if anomaly_result:
         actions.append(AIReportSummaryAction(label="查看异常分析", action_type="open_page", target="energy_anomaly_analysis"))
     return actions[:3]
 
@@ -398,9 +396,9 @@ def _build_fallback_response(
         risks=_default_risks(report_context, anomaly_result),
         suggestions=_default_suggestions(report_context, anomaly_result),
         evidence=_build_evidence(report_context, anomaly_result),
-        actions=_build_actions(payload, anomaly_result, get_ai_settings().ai_allowed_action_targets),
+        actions=_build_actions(payload, anomaly_result),
         meta=AIReportSummaryMeta(
-            generated_at=get_taipei_now(),
+            generated_at=get_timezone_now(),
             model=settings_model,
             report_type=report_context.report_type,
             audience=report_context.audience,
@@ -431,7 +429,6 @@ def get_report_summary(payload: AIReportSummaryRequest) -> AIReportSummaryRespon
         system_prompt, user_prompt = build_report_summary_prompts(
             report_context=report_context.model_dump(mode="json"),
             anomaly_insight=anomaly_insight,
-            allowed_action_targets=settings.ai_allowed_action_targets,
         )
         llm_response = OpenAICompatibleClient(settings).generate_json(
             system_prompt=system_prompt,
@@ -446,9 +443,9 @@ def get_report_summary(payload: AIReportSummaryRequest) -> AIReportSummaryRespon
             risks=_coerce_string_list(llm_response.get("risks")) or _default_risks(report_context, anomaly_result),
             suggestions=_coerce_suggestions(llm_response.get("suggestions")) or _default_suggestions(report_context, anomaly_result),
             evidence=_build_evidence(report_context, anomaly_result),
-            actions=_build_actions(payload, anomaly_result, settings.ai_allowed_action_targets),
+            actions=_build_actions(payload, anomaly_result),
             meta=AIReportSummaryMeta(
-                generated_at=get_taipei_now(),
+                generated_at=get_timezone_now(),
                 model=settings.llm_model,
                 report_type=report_context.report_type,
                 audience=report_context.audience,
@@ -467,3 +464,4 @@ def get_report_summary(payload: AIReportSummaryRequest) -> AIReportSummaryRespon
             stage_timings_ms=stage_timings_ms,
             settings_model=settings.llm_model,
         )
+

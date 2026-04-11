@@ -11,7 +11,7 @@ from app.schemas.schemas_dashboard import DashboardHighlightsResponse  # 导入 
 from app.schemas.schemas_dashboard import DashboardHighlightType  # 导入 dashboard 高亮类型枚举。
 from app.schemas.schemas_dashboard import DashboardOverviewResponse  # 导入 dashboard 总览响应模型。
 from .service_common import ResourceNotFoundError  # 导入资源不存在异常，方便返回一致的 404 语义。
-from .service_common import build_api_time_range  # 导入接口时间范围构造函数，方便统一输出台湾时区。
+from .service_common import build_api_time_range  # 导入接口时间范围构造函数，方便统一输出UTC+8时区。
 from .service_common import require_api_datetime  # 导入必填时间转换函数，方便输出 API 时间。
 from .service_common import resolve_time_range  # 导入时间范围补齐函数，方便沿用现有默认时间逻辑。
 

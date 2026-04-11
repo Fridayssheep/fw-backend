@@ -14,7 +14,7 @@ from app.schemas import AIEvidenceItem
 from app.schemas import AIFeedbackPrompt
 from app.schemas import EnergyAnomalyAnalysisRequest
 from app.schemas import WeatherCorrelationResponse
-from app.services.service_common import get_taipei_now
+from app.services.service_common import get_timezone_now
 from app.services.services_anomaly import get_energy_anomaly_analysis
 from app.services.services_energy import get_energy_weather_correlation
 
@@ -312,9 +312,8 @@ def _build_default_actions(request: AIAnalyzeAnomalyRequest) -> list[AIActionIte
     ]
 
 
-def _filter_allowed_actions(actions: list[AIActionItem], allowed_action_targets: tuple[str, ...]) -> list[AIActionItem]:
-    allowed_targets = set(allowed_action_targets)
-    return [item for item in actions if item.target in allowed_targets]
+def _filter_allowed_actions(actions: list[AIActionItem]) -> list[AIActionItem]:
+    return actions
 
 
 def _coerce_candidate_causes(value: Any, max_candidate_causes: int) -> list[AICandidateCause]:
@@ -360,7 +359,7 @@ def _coerce_evidence(value: Any) -> list[AIEvidenceItem]:
     return evidence_items
 
 
-def _coerce_actions(value: Any, allowed_action_targets: set[str]) -> list[AIActionItem]:
+def _coerce_actions(value: Any) -> list[AIActionItem]:
     if not isinstance(value, list):
         return []
     actions: list[AIActionItem] = []
@@ -371,8 +370,6 @@ def _coerce_actions(value: Any, allowed_action_targets: set[str]) -> list[AIActi
         action_type = str(item.get("action_type") or "").strip()
         target = str(item.get("target") or "").strip()
         if not (label and action_type and target):
-            continue
-        if target not in allowed_action_targets:
             continue
         actions.append(
             AIActionItem(
@@ -432,12 +429,11 @@ def _build_fallback_response(
     weather_result: WeatherCorrelationResponse | None,
     history_context: list[dict[str, Any]],
     settings_model: str,
-    allowed_action_targets: tuple[str, ...],
     stage_timings_ms: dict[str, int],
 ) -> AIAnalyzeAnomalyResponse:
     """在 LLM 不可用或输出非法时，构造可落地的兜底响应。"""
     analysis_id = _build_analysis_id()
-    generated_at = get_taipei_now()
+    generated_at = get_timezone_now()
     candidate_causes = _build_default_candidate_causes(
         anomaly_result=anomaly_result,
         weather_result=weather_result,
@@ -451,7 +447,7 @@ def _build_fallback_response(
         candidate_causes=candidate_causes,
         highlights=_collect_highlights(anomaly_result.summary, weather_result),
         evidence=_build_default_evidence(anomaly_result, weather_result, history_context),
-        actions=_filter_allowed_actions(_build_default_actions(request), allowed_action_targets),
+        actions=_filter_allowed_actions(_build_default_actions(request)),
         risk_notice="当前结果属于辅助诊断建议，不代表故障已经确认，请结合现场记录和人工排查进一步核实。",
         feedback_prompt=AIFeedbackPrompt(
             enabled=True,
@@ -485,20 +481,16 @@ def _normalize_llm_response(
     knowledge_context: list[dict[str, Any]],
     history_context: list[dict[str, Any]],
     settings_model: str,
-    allowed_action_targets: tuple[str, ...],
     stage_timings_ms: dict[str, int],
 ) -> AIAnalyzeAnomalyResponse:
     """将 LLM 原始 JSON 归一化为后端响应模型。"""
     analysis_id = _build_analysis_id()
-    generated_at = get_taipei_now()
+    generated_at = get_timezone_now()
     candidate_causes = _coerce_candidate_causes(llm_response.get("candidate_causes"), request.max_candidate_causes)
     evidence = _coerce_evidence(llm_response.get("evidence")) or _build_default_evidence(
         anomaly_result, weather_result, history_context
     )
-    actions = _coerce_actions(llm_response.get("actions"), set(allowed_action_targets)) or _filter_allowed_actions(
-        _build_default_actions(request),
-        allowed_action_targets,
-    )
+    actions = _coerce_actions(llm_response.get("actions")) or _filter_allowed_actions(_build_default_actions(request))
     return AIAnalyzeAnomalyResponse(
         analysis_id=analysis_id,
         status=str(llm_response.get("status") or ("needs_confirmation" if anomaly_result.is_anomalous else "low_confidence")),
@@ -602,7 +594,6 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
             weather_result=weather_result,
             knowledge_context=knowledge_context,
             history_context=history_context,
-            allowed_action_targets=settings.ai_allowed_action_targets,
         )
         llm_start = perf_counter()
         llm_response = OpenAICompatibleClient(settings).generate_json(system_prompt=system_prompt, user_prompt=user_prompt)
@@ -617,7 +608,6 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
             knowledge_context=knowledge_context,
             history_context=history_context,
             settings_model=settings.llm_model,
-            allowed_action_targets=settings.ai_allowed_action_targets,
             stage_timings_ms=stage_timings_ms,
         )
     except Exception:
@@ -630,6 +620,5 @@ def analyze_anomaly_with_ai(payload: AIAnalyzeAnomalyRequest) -> AIAnalyzeAnomal
             weather_result=weather_result,
             history_context=history_context,
             settings_model=settings.llm_model,
-            allowed_action_targets=settings.ai_allowed_action_targets,
             stage_timings_ms=stage_timings_ms,
         )

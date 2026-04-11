@@ -12,7 +12,7 @@ from app.schemas import AIOpsGuideMeta
 from app.schemas import AIOpsGuideRequest
 from app.schemas import AIOpsGuideResponse
 from app.schemas import AIOpsGuideStep
-from app.services.service_common import get_taipei_now
+from app.services.service_common import get_timezone_now
 
 from .anomaly_service import analyze_anomaly_with_ai
 from .config import get_ai_settings
@@ -107,7 +107,7 @@ def _build_ops_context(payload: AIOpsGuideRequest, anomaly_result: Any) -> OpsCo
             event_ids=(snapshot.event_ids if snapshot else []),
         ),
         diagnosis_snapshot=_build_diagnosis_snapshot(anomaly_result),
-        generated_at=get_taipei_now(),
+        generated_at=get_timezone_now(),
     )
 
 
@@ -344,7 +344,7 @@ def _build_fallback_response(
         applicability=_build_default_applicability(ops_context),
         diagnosis_snapshot=_build_diagnosis_snapshot_response(anomaly_result),
         meta=AIOpsGuideMeta(
-            generated_at=get_taipei_now(),
+            generated_at=get_timezone_now(),
             model=settings_model,
             used_tools=["analyze_anomaly_with_ai", *([] if not knowledge_items else ["search_domain_knowledge"]), *([] if not history_items else ["retrieve_similar_feedback_cases"])],
             context_source="server_enriched",
@@ -416,7 +416,6 @@ def get_ops_guide(payload: AIOpsGuideRequest) -> AIOpsGuideResponse:
             diagnosis_snapshot=diagnosis_snapshot,
             knowledge_items=knowledge_items,
             history_items=history_items,
-            allowed_action_targets=settings.ai_allowed_action_targets,
         )
         llm_response = OpenAICompatibleClient(settings).generate_json(
             system_prompt=system_prompt,
@@ -443,7 +442,7 @@ def get_ops_guide(payload: AIOpsGuideRequest) -> AIOpsGuideResponse:
             applicability=_coerce_applicability(llm_response.get("applicability")) or _build_default_applicability(ops_context),
             diagnosis_snapshot=_build_diagnosis_snapshot_response(anomaly_result),
             meta=AIOpsGuideMeta(
-                generated_at=get_taipei_now(),
+                generated_at=get_timezone_now(),
                 model=settings.llm_model,
                 used_tools=["analyze_anomaly_with_ai", *([] if not knowledge_items else ["search_domain_knowledge"]), *([] if not history_items else ["retrieve_similar_feedback_cases"])],
                 context_source="server_enriched",

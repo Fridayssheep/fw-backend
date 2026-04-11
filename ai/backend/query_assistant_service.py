@@ -14,9 +14,10 @@ from app.schemas import AIQueryAssistantUIPatch
 from app.schemas import AIQueryIntent
 from app.schemas import TimeRange
 from app.services.service_common import build_api_time_range
-from app.services.service_common import get_taipei_now
+from app.services.service_common import get_timezone_now
 from app.services.service_common import normalize_granularity
 from app.services.service_common import normalize_meter
+from app.services.service_common import resolve_request_current_time
 
 from .config import get_ai_settings
 from .llm_client import OpenAICompatibleClient
@@ -59,7 +60,8 @@ DATE_RANGE_PATTERN = re.compile(
 
 
 def _now_with_tz(request: AIQueryAssistantRequest) -> datetime:
-    return request.current_time or get_taipei_now()
+    # 统一按前端提供的时间上下文解析“现在”，避免 AI 和页面时间基准不一致。
+    return resolve_request_current_time(request)
 
 
 def _extract_meter(question: str) -> str | None:
@@ -528,7 +530,7 @@ def _normalize_llm_result(
         ui_patch=_build_ui_patch(endpoint, intent),
         warnings=warnings,
         meta=AIQueryAssistantMeta(
-            generated_at=get_taipei_now(),
+            generated_at=get_timezone_now(),
             model=settings_model,
             used_fallback=False,
         ),
@@ -555,7 +557,7 @@ def _build_fallback_response(
         ui_patch=_build_ui_patch(endpoint, fallback_intent),
         warnings=fallback_warnings,
         meta=AIQueryAssistantMeta(
-            generated_at=get_taipei_now(),
+            generated_at=get_timezone_now(),
             model=settings_model,
             used_fallback=True,
         ),
