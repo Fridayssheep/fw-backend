@@ -221,7 +221,6 @@ def build_analyze_anomaly_prompts(
     weather_result: WeatherCorrelationResponse | None,
     knowledge_context: list[dict[str, Any]],
     history_context: list[dict[str, Any]],
-    allowed_action_targets: tuple[str, ...],
 ) -> tuple[str, str]:
     """构造异常分析提示词（系统提示 + 用户提示）。"""
 
@@ -287,8 +286,6 @@ def build_analyze_anomaly_prompts(
     compact_weather = _build_compact_weather_context(weather_result)
     compact_history = _build_compact_history_context(history_context)
     compact_knowledge = knowledge_context[:3]
-    allowed_targets_text = '\n'.join(f'- {item}' for item in allowed_action_targets)
-
     user_prompt = f"""\
 请根据以下输入，对本次建筑能耗离线异常事件做运维诊断分析。
 
@@ -307,9 +304,6 @@ def build_analyze_anomaly_prompts(
 【历史反馈摘要】
 {_json_block(compact_history)}
 
-【允许使用的 actions.target】
-{allowed_targets_text}
-
 【输出要求】
 1. 只输出一个合法 JSON 对象。
 2. 顶层字段必须严格包含：
@@ -322,8 +316,7 @@ def build_analyze_anomaly_prompts(
 7. 如果历史反馈命中了相似案例，可以在 evidence 中加入 type=history_case 的证据。
 8. 如果 source 是 z_score_detector / isolation_forest / missing_data_detector，请把它理解为“异常发现来源”，不要把 detector 名称直接当成根因。
 9. 不要输出任何 JSON 之外的文本。
-10. actions.target 只能从上面的允许列表中选择，不要发明新的 target。
-11. 如果没有合适的下一步动作，actions 可以返回空数组。
+10. 如果没有合适的下一步动作，actions 可以返回空数组。
 
 【输出 JSON 骨架示例】
 {_json_block(output_schema_hint)}
@@ -336,7 +329,6 @@ def build_ops_guide_prompts(
     diagnosis_snapshot: dict[str, Any],
     knowledge_items: list[dict[str, Any]],
     history_items: list[dict[str, Any]],
-    allowed_action_targets: tuple[str, ...],
 ) -> tuple[str, str]:
     """构造运维指导提示词。"""
 
@@ -365,7 +357,6 @@ def build_ops_guide_prompts(
         }
     }
 
-    allowed_targets_text = "\n".join(f"- {item}" for item in allowed_action_targets)
     user_prompt = f"""\
 请根据下面已经补全的运维上下文，生成一份结构化运维指导。
 
@@ -380,9 +371,6 @@ def build_ops_guide_prompts(
 
 【历史反馈摘要】
 {_json_block(history_items[:3])}
-
-【允许使用的 actions.target】
-{allowed_targets_text}
 
 【输出要求】
 1. 只输出一个合法 JSON 对象。
@@ -405,7 +393,6 @@ def build_ops_guide_prompts(
 def build_report_summary_prompts(
     report_context: dict[str, Any],
     anomaly_insight: dict[str, Any] | None,
-    allowed_action_targets: tuple[str, ...],
 ) -> tuple[str, str]:
     """构造 AI 报表总结提示词。"""
 
@@ -431,7 +418,6 @@ def build_report_summary_prompts(
         ],
     }
 
-    allowed_targets_text = "\n".join(f"- {item}" for item in allowed_action_targets)
     user_prompt = f"""\
 请根据下面已经补全的报表上下文，生成一份结构化报表总结。
 
@@ -440,9 +426,6 @@ def build_report_summary_prompts(
 
 【异常洞察】
 {_json_block(anomaly_insight)}
-
-【允许使用的 actions.target】
-{allowed_targets_text}
 
 【输出要求】
 1. 只输出一个合法 JSON 对象。

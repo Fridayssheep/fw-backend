@@ -4,6 +4,7 @@ from typing import Any
 from pydantic import BaseModel
 from pydantic import Field
 
+from .schemas_common import CurrentTimeContext
 from .schemas_common import TimeRange
 from .schemas_energy import AnomalyDetectorBreakdownItem
 
@@ -129,9 +130,8 @@ class AIQueryAssistantUIPatch(BaseModel):
     suggested_interaction: str | None = None
 
 
-class AIQueryAssistantRequest(BaseModel):
+class AIQueryAssistantRequest(CurrentTimeContext):
     question: str
-    current_time: datetime | None = None
     current_endpoint: str | None = None
     current_filters: AIQueryAssistantFilters | None = None
 
@@ -394,7 +394,7 @@ class AIReportSummaryResponse(BaseModel):
     meta: AIReportSummaryMeta = Field(..., description="调用元信息")
 
 
-class AIQARequest(BaseModel):
+class AIQARequest(CurrentTimeContext):
     question: str = Field(..., description="用户提出的问题")
     session_id: str | None = Field(None, description="会话 ID，用于保持多轮对话上下文")
     context: "AIQAContext | None" = Field(None, description="页面上下文，用于异常分析等需要业务上下文的场景")

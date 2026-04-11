@@ -416,7 +416,6 @@ def get_ops_guide(payload: AIOpsGuideRequest) -> AIOpsGuideResponse:
             diagnosis_snapshot=diagnosis_snapshot,
             knowledge_items=knowledge_items,
             history_items=history_items,
-            allowed_action_targets=settings.ai_allowed_action_targets,
         )
         llm_response = OpenAICompatibleClient(settings).generate_json(
             system_prompt=system_prompt,

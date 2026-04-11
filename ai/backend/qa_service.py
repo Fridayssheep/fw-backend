@@ -19,6 +19,7 @@ from app.services.services_energy import get_energy_rankings
 from app.services.services_energy import get_energy_trend
 from app.services.services_energy import get_energy_weather_correlation
 from app.services.service_common import get_taipei_now
+from app.services.service_common import resolve_request_current_time
 from ai.mcp.formatters import _summarize_energy_compare
 from ai.mcp.formatters import _summarize_energy_query
 from ai.mcp.formatters import _summarize_energy_rankings
@@ -761,7 +762,9 @@ def _handle_data_query_question(payload: AIQARequest, settings_model: str) -> AI
     query_result = build_query_intent(
         AIQueryAssistantRequest(
             question=payload.question,
-            current_time=get_taipei_now(),
+            use_current_time=payload.use_current_time,
+            current_time=resolve_request_current_time(payload) if not payload.use_current_time else None,
+            timezone=payload.timezone,
         )
     )
     stage_timings_ms = {
@@ -964,6 +967,9 @@ def ask_ai_question(payload: AIQARequest) -> AIQAResponse:
         question=rewritten_question,
         session_id=session.session_id,
         context=effective_context,
+        use_current_time=payload.use_current_time,
+        current_time=payload.current_time,
+        timezone=payload.timezone,
     )
     save_user_message(session.session_id, payload.question, effective_context)
     try:

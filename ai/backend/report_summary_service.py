@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from time import perf_counter
 from typing import Any
@@ -309,14 +309,12 @@ def _default_suggestions(report_context: ReportContext, anomaly_result: Any | No
     return suggestions[:3]
 
 
-def _build_actions(payload: AIReportSummaryRequest, anomaly_result: Any | None, allowed_targets: tuple[str, ...]) -> list[AIReportSummaryAction]:
+def _build_actions(payload: AIReportSummaryRequest, anomaly_result: Any | None) -> list[AIReportSummaryAction]:
     if not payload.include_actions:
         return []
-    allowed = set(allowed_targets)
     actions: list[AIReportSummaryAction] = []
-    if "energy_trend" in allowed:
-        actions.append(AIReportSummaryAction(label="查看趋势图", action_type="open_page", target="energy_trend"))
-    if anomaly_result and "energy_anomaly_analysis" in allowed:
+    actions.append(AIReportSummaryAction(label="查看趋势图", action_type="open_page", target="energy_trend"))
+    if anomaly_result:
         actions.append(AIReportSummaryAction(label="查看异常分析", action_type="open_page", target="energy_anomaly_analysis"))
     return actions[:3]
 
@@ -398,7 +396,7 @@ def _build_fallback_response(
         risks=_default_risks(report_context, anomaly_result),
         suggestions=_default_suggestions(report_context, anomaly_result),
         evidence=_build_evidence(report_context, anomaly_result),
-        actions=_build_actions(payload, anomaly_result, get_ai_settings().ai_allowed_action_targets),
+        actions=_build_actions(payload, anomaly_result),
         meta=AIReportSummaryMeta(
             generated_at=get_taipei_now(),
             model=settings_model,
@@ -431,7 +429,6 @@ def get_report_summary(payload: AIReportSummaryRequest) -> AIReportSummaryRespon
         system_prompt, user_prompt = build_report_summary_prompts(
             report_context=report_context.model_dump(mode="json"),
             anomaly_insight=anomaly_insight,
-            allowed_action_targets=settings.ai_allowed_action_targets,
         )
         llm_response = OpenAICompatibleClient(settings).generate_json(
             system_prompt=system_prompt,
@@ -446,7 +443,7 @@ def get_report_summary(payload: AIReportSummaryRequest) -> AIReportSummaryRespon
             risks=_coerce_string_list(llm_response.get("risks")) or _default_risks(report_context, anomaly_result),
             suggestions=_coerce_suggestions(llm_response.get("suggestions")) or _default_suggestions(report_context, anomaly_result),
             evidence=_build_evidence(report_context, anomaly_result),
-            actions=_build_actions(payload, anomaly_result, settings.ai_allowed_action_targets),
+            actions=_build_actions(payload, anomaly_result),
             meta=AIReportSummaryMeta(
                 generated_at=get_taipei_now(),
                 model=settings.llm_model,
@@ -467,3 +464,4 @@ def get_report_summary(payload: AIReportSummaryRequest) -> AIReportSummaryRespon
             stage_timings_ms=stage_timings_ms,
             settings_model=settings.llm_model,
         )
+

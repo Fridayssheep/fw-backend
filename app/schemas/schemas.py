@@ -57,6 +57,7 @@ from .schemas_buildings import Building
 from .schemas_buildings import BuildingDetailResponse
 from .schemas_buildings import BuildingListResponse
 from .schemas_buildings import MeterAvailability
+from .schemas_common import CurrentTimeContext
 from .schemas_common import ErrorResponse
 from .schemas_common import MetricCard
 from .schemas_common import Pagination
@@ -98,6 +99,15 @@ from .schemas_meters import MeterDetailResponse
 from .schemas_meters import MeterListResponse
 from .schemas_meters import MeterStatus
 from .schemas_meters import MeterSummary
+from .schemas_system import RuntimeAIFeatureSettings
+from .schemas_system import RuntimeAISettingsPayload
+from .schemas_system import RuntimeAISettingsResponse
+from .schemas_system import RuntimeAISettingsUpdateRequest
+from .schemas_system import RuntimeAISettingsUpdateResponse
+from .schemas_system import RuntimeLLMSettings
+from .schemas_system import RuntimeRagFlowSettings
+from .schemas_system import SystemCurrentTimeRequest
+from .schemas_system import SystemCurrentTimeResponse
 from .schemas_system import SystemHealth
 
 
@@ -182,6 +192,7 @@ __all__ = [
     "EnergySummary",
     "EnergySummaryResponse",
     "EnergyTrendResponse",
+    "CurrentTimeContext",
     "ErrorResponse",
     "MaintenanceRecord",
     "MaintenanceRecordListResponse",
@@ -198,6 +209,15 @@ __all__ = [
     "MetricCard",
     "Pagination",
     "SelectedCauseSummary",
+    "RuntimeAIFeatureSettings",
+    "RuntimeAISettingsPayload",
+    "RuntimeAISettingsResponse",
+    "RuntimeAISettingsUpdateRequest",
+    "RuntimeAISettingsUpdateResponse",
+    "RuntimeLLMSettings",
+    "RuntimeRagFlowSettings",
+    "SystemCurrentTimeRequest",
+    "SystemCurrentTimeResponse",
     "SystemHealth",
     "TimeRange",
     "WeatherCorrelationResponse",

@@ -10,63 +10,63 @@ logger = logging.getLogger(__name__)
 
 
 class RagFlowError(Exception):
-    """RAGFlow 调用基础异常。"""
+    """Base exception for RAGFlow integration."""
 
 
 class RagFlowConfigurationError(RagFlowError):
-    """RAGFlow 配置缺失或不合法。"""
+    """Raised when required RAGFlow config is missing."""
 
 
 class RagFlowAuthenticationError(RagFlowError):
-    """RAGFlow 鉴权失败。"""
+    """Raised when upstream auth fails."""
 
 
 class RagFlowNotFoundError(RagFlowError):
-    """RAGFlow 上游资源不存在。"""
+    """Raised when upstream resource is not found."""
 
 
 class RagFlowTimeoutError(RagFlowError):
-    """RAGFlow 请求超时。"""
+    """Raised when upstream request times out."""
 
 
 class RagFlowUpstreamError(RagFlowError):
-    """RAGFlow 上游服务错误。"""
+    """Raised when upstream request fails."""
 
 
 class RagFlowInvalidResponseError(RagFlowError):
-    """RAGFlow 返回结构不符合预期。"""
+    """Raised when upstream response shape is invalid."""
 
 
 class RagFlowClient:
-    """RAGFlow HTTP 客户端封装。
-
-    当前保留两类能力：
-    1. retrieval：用于异常分析和 MCP 的知识检索
-    2. chats_openai：用于 /ai/qa 的 OpenAI-compatible 问答
-    """
+    """Thin HTTP client for RAGFlow retrieval and chat APIs."""
 
     def __init__(self, api_url: str | None = None, api_key: str | None = None):
-        settings = get_ai_settings()
-        self._settings = settings
-        self.api_url = (api_url or settings.ragflow_api_url).rstrip("/")
-        self.api_key = api_key or settings.ragflow_api_key
+        self._api_url_override = api_url
+        self._api_key_override = api_key
 
-    def _get_headers(self) -> dict[str, str]:
+    def _settings(self):
+        return get_ai_settings()
+
+    def _api_url(self) -> str:
+        return (self._api_url_override or self._settings().ragflow_api_url).rstrip("/")
+
+    def _api_key(self) -> str:
+        return self._api_key_override or self._settings().ragflow_api_key
+
+    def _headers(self) -> dict[str, str]:
         return {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {self._api_key()}",
         }
 
     def _ensure_basic_config(self) -> None:
-        if not self.api_key:
+        if not self._api_key():
             raise RagFlowConfigurationError("RAGFlow API key 未配置。")
 
     def _request_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """统一发送请求并按 HTTP 状态码映射为明确的上游异常。"""
-
         try:
-            with httpx.Client(timeout=self._settings.ragflow_timeout_seconds, trust_env=False) as client:
-                response = client.post(url, headers=self._get_headers(), json=payload)
+            with httpx.Client(timeout=self._settings().ragflow_timeout_seconds, trust_env=False) as client:
+                response = client.post(url, headers=self._headers(), json=payload)
         except httpx.TimeoutException as exc:
             raise RagFlowTimeoutError("RAGFlow 请求超时。") from exc
         except httpx.RequestError as exc:
@@ -87,13 +87,6 @@ class RagFlowClient:
             raise RagFlowInvalidResponseError("RAGFlow 返回了无法解析的 JSON。") from exc
 
     def _normalize_reference(self, raw_reference: Any) -> dict[str, list[dict[str, Any]]]:
-        """把 RAGFlow 的引用信息整理成统一结构。
-
-        RAGFlow 在不同接口/版本下，reference.chunks 和 reference.doc_aggs
-        可能返回 dict，也可能返回 list。这里统一兼容，避免明明命中了知识库，
-        但因为结构差异被我们吃掉。
-        """
-
         if not isinstance(raw_reference, dict):
             return {"chunks": [], "doc_aggs": []}
 
@@ -144,11 +137,6 @@ class RagFlowClient:
         }
 
     def _normalize_retrieval_chunk(self, raw_chunk: dict[str, Any]) -> dict[str, Any]:
-        """把 retrieval 接口返回的原始 chunk 统一成 /ai/qa 可直接使用的结构。
-
-        这里会保留 metadata 原文，避免后续页面或调试时丢失 RAGFlow 原始字段。
-        """
-
         similarity = (
             raw_chunk.get("similarity")
             or raw_chunk.get("vector_similarity")
@@ -171,12 +159,6 @@ class RagFlowClient:
         }
 
     def _normalize_retrieval_doc_aggs(self, raw_doc_aggs: Any) -> list[dict[str, Any]]:
-        """按 retrieval 文档格式解析 doc_aggs。
-
-        retrieval 文档当前示例返回的是 list，历史版本也可能出现 dict。
-        这里保持兼容，但优先遵循官方字段名 `doc_id` / `doc_name` / `count`。
-        """
-
         if isinstance(raw_doc_aggs, list):
             doc_agg_items = [item for item in raw_doc_aggs if isinstance(item, dict)]
         elif isinstance(raw_doc_aggs, dict):
@@ -202,8 +184,6 @@ class RagFlowClient:
         return normalized_doc_aggs
 
     def _build_doc_aggs_from_chunks(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """根据 chunk 列表汇总出文档级命中信息。"""
-
         doc_stats: dict[tuple[str | None, str | None], dict[str, Any]] = {}
         for chunk in chunks:
             document_id = chunk.get("document_id")
@@ -232,18 +212,17 @@ class RagFlowClient:
         dataset_ids: list[str] | None = None,
         top_k: int = 5,
     ) -> dict[str, list[dict[str, Any]]]:
-        """从 RAGFlow retrieval 接口获取稳定的结构化引用。"""
-
-        if not self.api_key:
+        settings = self._settings()
+        if not self._api_key():
             logger.warning("RAGFlow API key 未配置，retrieve_references 直接返回空引用。")
             return {"chunks": [], "doc_aggs": []}
 
-        datasets = dataset_ids or list(self._settings.ragflow_dataset_ids)
+        datasets = dataset_ids or list(settings.ragflow_dataset_ids)
         if not datasets:
             logger.warning("RAGFlow dataset_ids 未配置，retrieve_references 直接返回空引用。")
             return {"chunks": [], "doc_aggs": []}
 
-        url = f"{self.api_url}/retrieval"
+        url = f"{self._api_url()}/retrieval"
         payload = {
             "question": question,
             "dataset_ids": datasets,
@@ -271,7 +250,6 @@ class RagFlowClient:
             normalized_doc_aggs = self._normalize_retrieval_doc_aggs(body["data"].get("doc_aggs"))
             return {
                 "chunks": normalized_chunks,
-                # 优先使用 retrieval 官方返回的 doc_aggs；只有上游没给时才本地回退聚合。
                 "doc_aggs": normalized_doc_aggs or self._build_doc_aggs_from_chunks(normalized_chunks),
             }
 
@@ -284,12 +262,6 @@ class RagFlowClient:
         dataset_ids: list[str] | None = None,
         top_k: int = 3,
     ) -> list[dict[str, Any]]:
-        """从 RAGFlow 知识库检索相关片段。
-
-        这里直接复用统一的 retrieval 规范化逻辑，确保 MCP、异常分析、/ai/qa
-        看到的 chunk 字段尽量一致。
-        """
-
         references = self.retrieve_references(
             question=question,
             dataset_ids=dataset_ids,
@@ -303,17 +275,16 @@ class RagFlowClient:
         chat_id: str | None = None,
         session_id: str | None = None,
     ) -> dict[str, Any]:
-        """通过 RAGFlow OpenAI-compatible 聊天接口执行知识问答。"""
-
         self._ensure_basic_config()
+        settings = self._settings()
 
-        chat = chat_id or self._settings.ragflow_default_chat_id
+        chat = chat_id or settings.ragflow_default_chat_id
         if not chat:
             raise RagFlowConfigurationError("RAGFlow 默认 Chat ID 未配置。")
 
-        url = f"{self.api_url}/chats_openai/{chat}/chat/completions"
+        url = f"{self._api_url()}/chats_openai/{chat}/chat/completions"
         payload: dict[str, Any] = {
-            "model": self._settings.ragflow_chat_model,
+            "model": settings.ragflow_chat_model,
             "messages": [
                 {
                     "role": "user",
@@ -323,7 +294,7 @@ class RagFlowClient:
             "stream": False,
         }
         if session_id:
-            logger.warning("RAGFlow chats_openai 官方文档未声明 session_id 请求参数，当前忽略传入的 session_id。")
+            logger.warning("RAGFlow chats_openai 当前未使用 session_id 请求参数，已忽略传入值。")
 
         body = self._request_json(url, payload)
 

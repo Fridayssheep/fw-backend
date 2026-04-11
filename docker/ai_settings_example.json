@@ -1,0 +1,22 @@
+{
+  "llm": {
+    "base_url": "https://127.0.0.1:11434/v1",
+    "api_key": "",
+    "model": "qwen3.6-plus",
+    "timeout_seconds": 420.0,
+    "temperature": 0.2,
+    "top_p": 0.9
+  },
+  "ragflow": {
+    "api_url": "http://host.docker.internal:8450/api/v1",
+    "api_key": "",
+    "timeout_seconds": 60.0,
+    "chat_model": "ragflow-chat",
+    "dataset_ids": ["",""],
+    "default_chat_id": ""
+  },
+  "features": {
+    "enable_history": true,
+    "enable_knowledge": true
+  }
+}

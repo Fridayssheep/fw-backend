@@ -34,6 +34,8 @@ services:
         condition: service_healthy
     env_file:
       - ./.env
+    volumes:
+      - ./ai_settings.json:/app/data/runtime/ai_settings.json
     ports:
       - "8000:8000"
     healthcheck:
