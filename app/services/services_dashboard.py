@@ -6,10 +6,18 @@ from app.core.database import fetch_all  # 导入多行查询函数，方便查�
 from app.core.database import fetch_one  # 导入单行查询函数，方便做建筑存在性检查。
 from app.schemas.schemas_common import MetricCard  # 导入通用指标卡片模型，方便复用现有前端结构。
 from app.schemas.schemas_dashboard import AnomalySummary  # 导入 dashboard 异常摘要模型。
+from app.schemas.schemas_dashboard import DashboardBarChart  # 导入 dashboard 柱状图模型。
+from app.schemas.schemas_dashboard import DashboardCardStatus  # 导入 dashboard 卡片状态枚举。
+from app.schemas.schemas_dashboard import DashboardChartRange  # 导入 dashboard 图表范围枚举。
 from app.schemas.schemas_dashboard import DashboardHighlight  # 导入 dashboard 高亮模型。
 from app.schemas.schemas_dashboard import DashboardHighlightsResponse  # 导入 dashboard 高亮列表响应模型。
 from app.schemas.schemas_dashboard import DashboardHighlightType  # 导入 dashboard 高亮类型枚举。
+from app.schemas.schemas_dashboard import DashboardKpiCard  # 导入 dashboard 顶部 KPI 卡片模型。
+from app.schemas.schemas_dashboard import DashboardMiniBar  # 导入 dashboard 迷你柱状图模型。
 from app.schemas.schemas_dashboard import DashboardOverviewResponse  # 导入 dashboard 总览响应模型。
+from app.schemas.schemas_dashboard import DashboardQuickLinkLevel  # 导入 dashboard 快捷跳转等级枚举。
+from app.schemas.schemas_dashboard import DashboardTrendChart  # 导入 dashboard 折线图模型。
+from app.schemas.schemas_dashboard import DashboardTrendSeries  # 导入 dashboard 折线图序列模型。
 from .service_common import ResourceNotFoundError  # 导入资源不存在异常，方便返回一致的 404 语义。
 from .service_common import build_api_time_range  # 导入接口时间范围构造函数，方便统一输出UTC+8时区。
 from .service_common import require_api_datetime  # 导入必填时间转换函数，方便输出 API 时间。
@@ -21,6 +29,10 @@ DASHBOARD_DEFAULT_LIMIT = 3  # 定义 dashboard highlights 默认返回条数。
 DASHBOARD_ANOMALY_LIMIT = 5  # 定义 dashboard overview 默认最多返回的异常条数。
 DASHBOARD_HIGH_ENERGY_MULTIPLIER = 1.25  # 定义高能耗建筑判定时相对基线的放大倍数。
 CARBON_FACTOR_KG_PER_KWH = 0.554  # 定义比赛版估算碳排时使用的固定电力排放因子。
+DASHBOARD_LIGHTING_ESTIMATE_RATIO = 0.22  # 定义照明能耗估算比例（无 lighting 表计时使用）。
+DASHBOARD_RECENT_DAYS = 7  # 定义顶部卡片默认回看天数。
+DASHBOARD_COP_GOOD_THRESHOLD = 3.0  # 定义 COP 良好阈值。
+DASHBOARD_COP_WARNING_THRESHOLD = 2.0  # 定义 COP 警告阈值。
 
 
 def build_dashboard_scope_filters(  # 定义构造 dashboard 范围过滤条件的函数。
@@ -154,6 +166,347 @@ def classify_anomaly_severity(deviation_rate: float) -> str:  # 定义根据偏�
     if deviation_rate >= 0.4:  # 如果偏离率达到 40% 及以上，
         return "medium"  # 就标记为中风险。
     return "low"  # 其余超过阈值的情况统一标记为低风险。
+
+
+def normalize_dashboard_chart_range(chart_range: DashboardChartRange | str | None) -> DashboardChartRange:  # 定义标准化 dashboard 图表范围的函数。
+    if isinstance(chart_range, DashboardChartRange):  # 如果传入值本身已经是合法枚举，
+        return chart_range  # 就直接返回原值。
+    normalized_text = str(chart_range or DashboardChartRange.day.value).strip().lower()  # 把原始值转成稳定小写文本。
+    if normalized_text in {item.value for item in DashboardChartRange}:  # 如果文本值属于允许范围，
+        return DashboardChartRange(normalized_text)  # 就转成枚举并返回。
+    return DashboardChartRange.day  # 其余非法值统一回退到 day。
+
+
+def build_dashboard_trend_context(  # 定义构造 dashboard 趋势图上下文的函数。
+    current_end: datetime,  # 接收 dashboard 当前周期结束时间。
+    chart_range: DashboardChartRange,  # 接收图表范围枚举。
+) -> tuple[list[datetime], list[str], datetime, datetime, str]:  # 返回趋势点位时间列表、标签列表、查询开始、查询结束和 SQL 粒度。
+    anchor_day_start = current_end.replace(hour=0, minute=0, second=0, microsecond=0)  # 把当前周期结束时间对齐到当天 00:00。
+    if chart_range == DashboardChartRange.day:  # 如果当前是日视图，
+        point_times = [anchor_day_start + timedelta(hours=offset) for offset in (0, 4, 8, 12, 16, 20, 24)]  # 按 4 小时间隔构造 7 个折线点位。
+        labels = [point_time.strftime("%H:%M") for point_time in point_times[:-1]] + ["24:00"]  # 构造日视图标签并把最后一个标签固定成 24:00。
+        query_start = point_times[0]  # 把查询开始时间设为当天 00:00。
+        query_end = point_times[-1] + timedelta(hours=1)  # 把查询结束时间稍微向后扩一小时，确保能覆盖 24:00 对应桶。
+        return point_times, labels, query_start, query_end, "hour"  # 返回日视图需要的上下文信息。
+    if chart_range == DashboardChartRange.week:  # 如果当前是周视图，
+        chart_start = anchor_day_start - timedelta(days=6)  # 把趋势起点设为最近 7 天的第一天 00:00。
+        point_times = [chart_start + timedelta(days=offset) for offset in range(7)]  # 构造最近 7 天的折线点位。
+        labels = [point_time.strftime("%m-%d") for point_time in point_times]  # 构造周视图标签列表。
+        query_start = point_times[0]  # 把查询开始时间设为第一天 00:00。
+        query_end = anchor_day_start + timedelta(days=1)  # 把查询结束时间设为当天 24:00。
+        return point_times, labels, query_start, query_end, "day"  # 返回周视图需要的上下文信息。
+    chart_start = anchor_day_start - timedelta(days=29)  # 把月视图趋势起点设为最近 30 天的第一天 00:00。
+    point_times = [chart_start + timedelta(days=offset) for offset in range(30)]  # 构造最近 30 天的折线点位。
+    labels = [point_time.strftime("%m-%d") for point_time in point_times]  # 构造月视图标签列表。
+    query_start = point_times[0]  # 把查询开始时间设为第一天 00:00。
+    query_end = anchor_day_start + timedelta(days=1)  # 把查询结束时间设为当天 24:00。
+    return point_times, labels, query_start, query_end, "day"  # 返回月视图需要的上下文信息。
+
+
+def get_dashboard_trend_rows(  # 定义查询 dashboard 趋势图原始数据的函数。
+    query_start: datetime,  # 接收趋势查询开始时间。
+    query_end: datetime,  # 接收趋势查询结束时间。
+    site_id: str | None,  # 接收站点编号参数。
+    building_id: str | None,  # 接收建筑编号参数。
+    bucket_granularity: str,  # 接收 SQL 时间粒度。
+) -> list[dict[str, Any]]:  # 返回趋势原始聚合行列表。
+    where_sql, params = build_dashboard_scope_filters(site_id, building_id)  # 先复用 dashboard 范围过滤条件。
+    return fetch_all(  # 执行趋势图聚合查询并返回结果。
+        f"""
+        SELECT
+            date_trunc('{bucket_granularity}', mr.timestamp) AS bucket_time,
+            mr.meter AS meter,
+            COALESCE(SUM(mr.meter_reading), 0) AS value
+        FROM meter_readings mr
+        LEFT JOIN building_metadata bm ON mr.building_id = bm.building_id
+        WHERE {where_sql}
+          AND mr.timestamp >= :trend_start
+          AND mr.timestamp < :trend_end
+          AND mr.meter IN ('electricity', 'chilledwater', 'lighting')
+        GROUP BY 1, 2
+        ORDER BY 1 ASC, 2 ASC
+        """,
+        {
+            **params,
+            "trend_start": query_start,
+            "trend_end": query_end,
+        },
+    )  # 返回原始趋势聚合行。
+
+
+def build_dashboard_trend_chart(  # 定义构造 dashboard 折线图对象的函数。
+    current_end: datetime,  # 接收 dashboard 当前周期结束时间。
+    site_id: str | None,  # 接收站点编号参数。
+    building_id: str | None,  # 接收建筑编号参数。
+    chart_range: DashboardChartRange,  # 接收图表范围枚举。
+) -> DashboardTrendChart:  # 返回 dashboard 折线图模型。
+    point_times, labels, query_start, query_end, bucket_granularity = build_dashboard_trend_context(current_end, chart_range)  # 先构造折线图上下文。
+    trend_rows = get_dashboard_trend_rows(query_start, query_end, site_id, building_id, bucket_granularity)  # 查询折线图原始聚合数据。
+    index_map = {point_time: index for index, point_time in enumerate(point_times)}  # 构造时间到索引的映射，方便 O(1) 回填序列值。
+    series_value_map: dict[str, list[float]] = {  # 初始化三条折线序列的值缓存。
+        "electricity": [0.0] * len(point_times),  # 初始化总能耗（电耗）序列。
+        "chilledwater": [0.0] * len(point_times),  # 初始化制冷能耗序列。
+        "lighting": [0.0] * len(point_times),  # 初始化照明能耗序列。
+    }  # 完成序列缓存初始化。
+    for row in trend_rows:  # 遍历每一条趋势聚合行。
+        bucket_time = row.get("bucket_time")  # 读取当前行时间桶。
+        meter_name = str(row.get("meter") or "")  # 读取当前行表计名称。
+        if bucket_time not in index_map:  # 如果当前时间桶不在预期展示点位里，
+            continue  # 就跳过当前行。
+        if meter_name not in series_value_map:  # 如果当前表计不是三条目标序列之一，
+            continue  # 就跳过当前行。
+        series_index = index_map[bucket_time]  # 获取当前时间桶对应的序列索引。
+        series_value_map[meter_name][series_index] = round(series_value_map[meter_name][series_index] + to_float(row.get("value")), 4)  # 把当前聚合值累计到目标序列。
+    lighting_values = series_value_map["lighting"]  # 读取照明序列原始值。
+    if max(lighting_values, default=0.0) <= 0:  # 如果当前数据源里没有 lighting 表计值，
+        lighting_values = [round(value * DASHBOARD_LIGHTING_ESTIMATE_RATIO, 4) for value in series_value_map["electricity"]]  # 就按电耗比例生成估算照明序列。
+    trend_series = [  # 构造前端折线图需要的序列列表。
+        DashboardTrendSeries(key="total_energy", name="总能耗", unit="kWh", chart_type="line", values=series_value_map["electricity"]),  # 构造总能耗折线序列。
+        DashboardTrendSeries(key="cooling_energy", name="制冷能耗", unit="kWh", chart_type="line", values=series_value_map["chilledwater"]),  # 构造制冷能耗折线序列。
+        DashboardTrendSeries(key="lighting_energy", name="照明能耗", unit="kWh", chart_type="line", values=lighting_values),  # 构造照明能耗折线序列。
+    ]  # 完成折线图序列构造。
+    return DashboardTrendChart(range=chart_range, labels=labels, series=trend_series)  # 返回完整折线图对象。
+
+
+def build_dashboard_recent_daily_context(  # 定义构造 dashboard 顶部卡片近 N 天上下文的函数。
+    current_end: datetime,  # 接收 dashboard 当前周期结束时间。
+    recent_days: int = DASHBOARD_RECENT_DAYS,  # 接收近 N 天窗口长度。
+) -> tuple[list[datetime], list[str], datetime, datetime]:  # 返回日期点位、日期标签、查询开始和查询结束。
+    anchor_day_end = current_end.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)  # 把当前周期结束时间对齐到当天 24:00。
+    query_start = anchor_day_end - timedelta(days=recent_days)  # 计算近 N 天窗口的查询开始时间。
+    day_points = [query_start + timedelta(days=offset) for offset in range(recent_days)]  # 构造近 N 天每天 00:00 点位列表。
+    day_labels = [day_point.strftime("%m-%d") for day_point in day_points]  # 构造近 N 天标签列表。
+    return day_points, day_labels, query_start, anchor_day_end  # 返回顶部卡片所需上下文。
+
+
+def get_dashboard_recent_energy_rows(  # 定义查询 dashboard 顶部卡片近 N 天能耗行数据的函数。
+    query_start: datetime,  # 接收查询开始时间。
+    query_end: datetime,  # 接收查询结束时间。
+    site_id: str | None,  # 接收站点编号参数。
+    building_id: str | None,  # 接收建筑编号参数。
+) -> list[dict[str, Any]]:  # 返回按天聚合的能耗行列表。
+    where_sql, params = build_dashboard_scope_filters(site_id, building_id)  # 先复用 dashboard 范围过滤条件。
+    return fetch_all(  # 执行近 N 天电耗和制冷能耗聚合查询。
+        f"""
+        SELECT
+            date_trunc('day', mr.timestamp) AS bucket_day,
+            mr.meter AS meter,
+            COALESCE(SUM(mr.meter_reading), 0) AS value
+        FROM meter_readings mr
+        LEFT JOIN building_metadata bm ON mr.building_id = bm.building_id
+        WHERE {where_sql}
+          AND mr.timestamp >= :recent_start
+          AND mr.timestamp < :recent_end
+          AND mr.meter IN ('electricity', 'chilledwater')
+        GROUP BY 1, 2
+        ORDER BY 1 ASC, 2 ASC
+        """,
+        {
+            **params,
+            "recent_start": query_start,
+            "recent_end": query_end,
+        },
+    )  # 返回近 N 天能耗行列表。
+
+
+def get_dashboard_recent_anomaly_rows(  # 定义查询 dashboard 顶部卡片近 N 天异常行数据的函数。
+    query_start: datetime,  # 接收查询开始时间。
+    query_end: datetime,  # 接收查询结束时间。
+    site_id: str | None,  # 接收站点编号参数。
+    building_id: str | None,  # 接收建筑编号参数。
+) -> list[dict[str, Any]]:  # 返回按天聚合的异常行列表。
+    clauses: list[str] = ["ae.start_time >= :recent_start", "ae.start_time < :recent_end"]  # 初始化异常查询过滤条件。
+    params: dict[str, Any] = {"recent_start": query_start, "recent_end": query_end}  # 初始化异常查询参数字典。
+    if site_id:  # 如果传入了站点过滤，
+        clauses.append("COALESCE(ae.site_id, bm.site_id) = :dashboard_site_id")  # 就追加站点过滤条件。
+        params["dashboard_site_id"] = site_id  # 把站点参数写入参数字典。
+    if building_id:  # 如果传入了建筑过滤，
+        clauses.append("ae.building_id = :dashboard_building_id")  # 就追加建筑过滤条件。
+        params["dashboard_building_id"] = building_id  # 把建筑参数写入参数字典。
+    try:  # 尝试执行近 N 天异常聚合查询。
+        return fetch_all(  # 执行近 N 天异常聚合查询并返回结果。
+            f"""
+            SELECT
+                date_trunc('day', ae.start_time) AS bucket_day,
+                COUNT(*) AS event_count,
+                COUNT(DISTINCT ae.building_id) AS building_count,
+                COALESCE(SUM(CASE WHEN UPPER(COALESCE(ae.severity, '')) IN ('CRITICAL', 'HIGH', 'MEDIUM') THEN 1 ELSE 0 END), 0) AS pending_count
+            FROM anomaly_events ae
+            LEFT JOIN building_metadata bm ON ae.building_id = bm.building_id
+            WHERE {' AND '.join(clauses)}
+            GROUP BY 1
+            ORDER BY 1 ASC
+            """,
+            params,
+        )  # 返回近 N 天异常行列表。
+    except Exception:  # 如果当前环境尚未初始化 anomaly_events 表或查询失败，
+        return []  # 就回退为空列表，避免 dashboard 主流程中断。
+
+
+def get_dashboard_average_resolution_hours(  # 定义查询 dashboard 平均处理时长的函数。
+    query_start: datetime,  # 接收查询开始时间。
+    query_end: datetime,  # 接收查询结束时间。
+    site_id: str | None,  # 接收站点编号参数。
+    building_id: str | None,  # 接收建筑编号参数。
+) -> float:  # 返回平均处理时长（小时）。
+    clauses: list[str] = [  # 初始化平均处理时长过滤条件列表。
+        "ae.start_time >= :recent_start",  # 追加开始时间过滤条件。
+        "ae.start_time < :recent_end",  # 追加结束时间过滤条件。
+        "ae.end_time >= ae.start_time",  # 限制结束时间必须不早于开始时间。
+    ]  # 完成过滤条件初始化。
+    params: dict[str, Any] = {"recent_start": query_start, "recent_end": query_end}  # 初始化平均处理时长查询参数字典。
+    if site_id:  # 如果传入了站点过滤，
+        clauses.append("COALESCE(ae.site_id, bm.site_id) = :dashboard_site_id")  # 就追加站点过滤条件。
+        params["dashboard_site_id"] = site_id  # 把站点参数写入参数字典。
+    if building_id:  # 如果传入了建筑过滤，
+        clauses.append("ae.building_id = :dashboard_building_id")  # 就追加建筑过滤条件。
+        params["dashboard_building_id"] = building_id  # 把建筑参数写入参数字典。
+    try:  # 尝试执行平均处理时长查询。
+        row = fetch_one(  # 执行平均处理时长查询。
+            f"""
+            SELECT
+                COALESCE(AVG(EXTRACT(EPOCH FROM (ae.end_time - ae.start_time)) / 3600.0), 0) AS avg_hours
+            FROM anomaly_events ae
+            LEFT JOIN building_metadata bm ON ae.building_id = bm.building_id
+            WHERE {' AND '.join(clauses)}
+            """,
+            params,
+        ) or {"avg_hours": 0}  # 如果查询为空则回退到零值。
+        return round(float(row.get("avg_hours") or 0), 4)  # 返回保留四位小数的平均处理时长。
+    except Exception:  # 如果当前环境尚未初始化 anomaly_events 表或查询失败，
+        return 0.0  # 就回退到零小时，避免 dashboard 主流程中断。
+
+
+def format_change_rate_text(change_rate: float | None) -> str:  # 定义把变化率格式化成展示文案的函数。
+    if change_rate is None:  # 如果当前没有可比变化率，
+        return "无可比数据"  # 就返回“无可比数据”文案。
+    sign = "+" if change_rate >= 0 else "-"  # 根据变化率方向选择正负号。
+    return f"{sign}{round(abs(change_rate) * 100, 2)}%"  # 返回百分比文本。
+
+
+def resolve_cop_status(cop_value: float) -> tuple[DashboardCardStatus, str]:  # 定义根据 COP 值判定状态的函数。
+    if cop_value >= DASHBOARD_COP_GOOD_THRESHOLD:  # 如果 COP 达到良好阈值，
+        return DashboardCardStatus.good, "运行状态良好"  # 就返回良好状态和文案。
+    if cop_value >= DASHBOARD_COP_WARNING_THRESHOLD:  # 如果 COP 处于警告阈值和良好阈值之间，
+        return DashboardCardStatus.warning, "运行状态一般"  # 就返回警告状态和文案。
+    return DashboardCardStatus.danger, "运行状态偏低"  # 其余情况返回高风险状态和文案。
+
+
+def build_dashboard_kpi_cards_and_bars(  # 定义构造 dashboard 顶部卡片和柱状图的函数。
+    current_end: datetime,  # 接收 dashboard 当前周期结束时间。
+    site_id: str | None,  # 接收站点编号参数。
+    building_id: str | None,  # 接收建筑编号参数。
+) -> tuple[list[DashboardKpiCard], list[DashboardBarChart], dict[str, int | float]]:  # 返回顶部卡片列表、柱状图列表和快捷统计字典。
+    day_points, day_labels, query_start, query_end = build_dashboard_recent_daily_context(current_end, DASHBOARD_RECENT_DAYS)  # 先构造近 N 天上下文。
+    day_index_map = {day_point: index for index, day_point in enumerate(day_points)}  # 构造日期到索引映射，方便回填数组。
+    energy_rows = get_dashboard_recent_energy_rows(query_start, query_end, site_id, building_id)  # 查询近 N 天能耗聚合行。
+    anomaly_rows = get_dashboard_recent_anomaly_rows(query_start, query_end, site_id, building_id)  # 查询近 N 天异常聚合行。
+    electricity_values = [0.0] * len(day_points)  # 初始化近 N 天日电耗序列。
+    cooling_values = [0.0] * len(day_points)  # 初始化近 N 天日制冷能耗序列。
+    for row in energy_rows:  # 遍历每一条近 N 天能耗聚合行。
+        bucket_day = row.get("bucket_day")  # 读取当前行日期桶。
+        meter_name = str(row.get("meter") or "")  # 读取当前行表计名称。
+        if bucket_day not in day_index_map:  # 如果当前日期桶不在近 N 天窗口中，
+            continue  # 就跳过当前行。
+        value_index = day_index_map[bucket_day]  # 获取当前日期桶索引。
+        if meter_name == "electricity":  # 如果当前行是电耗，
+            electricity_values[value_index] = round(electricity_values[value_index] + to_float(row.get("value")), 4)  # 就累计到电耗序列。
+        elif meter_name == "chilledwater":  # 如果当前行是制冷能耗，
+            cooling_values[value_index] = round(cooling_values[value_index] + to_float(row.get("value")), 4)  # 就累计到制冷序列。
+    cop_values = [safe_divide(cooling_value, electricity_value) if electricity_value > 0 else 0.0 for cooling_value, electricity_value in zip(cooling_values, electricity_values)]  # 计算近 N 天 COP 序列。
+    anomaly_building_values = [0] * len(day_points)  # 初始化近 N 天异常建筑数序列。
+    pending_work_order_values = [0] * len(day_points)  # 初始化近 N 天待处理工单数序列。
+    anomaly_event_values = [0] * len(day_points)  # 初始化近 N 天异常事件总数序列。
+    for row in anomaly_rows:  # 遍历每一条近 N 天异常聚合行。
+        bucket_day = row.get("bucket_day")  # 读取当前行日期桶。
+        if bucket_day not in day_index_map:  # 如果当前日期桶不在近 N 天窗口中，
+            continue  # 就跳过当前行。
+        value_index = day_index_map[bucket_day]  # 获取当前日期桶索引。
+        anomaly_building_values[value_index] = int(row.get("building_count") or 0)  # 写入当前日期的异常建筑数。
+        pending_work_order_values[value_index] = int(row.get("pending_count") or 0)  # 写入当前日期的待处理工单数。
+        anomaly_event_values[value_index] = int(row.get("event_count") or 0)  # 写入当前日期的异常事件总数。
+    latest_index = len(day_points) - 1  # 计算最新一天索引。
+    previous_index = max(latest_index - 1, 0)  # 计算前一天索引（防止越界）。
+    latest_electricity = electricity_values[latest_index] if electricity_values else 0.0  # 读取最新一天总电耗。
+    previous_electricity = electricity_values[previous_index] if electricity_values else 0.0  # 读取前一天总电耗。
+    energy_change_rate = calculate_change_rate(latest_electricity, previous_electricity)  # 计算总电耗相对前一天变化率。
+    energy_status = DashboardCardStatus.warning if (energy_change_rate or 0.0) > 0.08 else DashboardCardStatus.good if latest_electricity > 0 else DashboardCardStatus.neutral  # 根据变化幅度判定总电耗卡片状态。
+    latest_cop = cop_values[latest_index] if cop_values else 0.0  # 读取最新一天 COP。
+    previous_cop = cop_values[previous_index] if cop_values else 0.0  # 读取前一天 COP。
+    cop_change_rate = calculate_change_rate(latest_cop, previous_cop)  # 计算 COP 相对前一天变化率。
+    cop_status, cop_subtitle = resolve_cop_status(latest_cop)  # 根据最新 COP 判定状态和副标题。
+    latest_anomaly_buildings = anomaly_building_values[latest_index] if anomaly_building_values else 0  # 读取最新一天异常建筑数。
+    previous_anomaly_buildings = anomaly_building_values[previous_index] if anomaly_building_values else 0  # 读取前一天异常建筑数。
+    anomaly_change_rate = calculate_change_rate(float(latest_anomaly_buildings), float(previous_anomaly_buildings))  # 计算异常建筑数变化率。
+    latest_pending_work_orders = pending_work_order_values[latest_index] if pending_work_order_values else 0  # 读取最新一天待处理工单数。
+    previous_pending_work_orders = pending_work_order_values[previous_index] if pending_work_order_values else 0  # 读取前一天待处理工单数。
+    pending_change_rate = calculate_change_rate(float(latest_pending_work_orders), float(previous_pending_work_orders))  # 计算待处理工单数变化率。
+    latest_event_count = anomaly_event_values[latest_index] if anomaly_event_values else 0  # 读取最新一天异常事件总数。
+    latest_processed_count = max(latest_event_count - latest_pending_work_orders, 0)  # 按“总事件 - 待处理”估算已处理数量。
+    anomaly_status = DashboardCardStatus.danger if latest_anomaly_buildings >= 3 else DashboardCardStatus.warning if latest_anomaly_buildings > 0 else DashboardCardStatus.good  # 根据异常建筑数判定状态。
+    work_order_status = DashboardCardStatus.danger if latest_pending_work_orders >= 5 else DashboardCardStatus.warning if latest_pending_work_orders > 0 else DashboardCardStatus.good  # 根据待处理工单数判定状态。
+    average_resolution_hours = get_dashboard_average_resolution_hours(query_start, query_end, site_id, building_id)  # 查询近 N 天平均处理时长。
+    if average_resolution_hours <= 0:  # 如果缺少可用处理时长数据，
+        work_order_subtitle = "平均处理时长 暂无数据"  # 就返回暂无数据文案。
+    elif average_resolution_hours < 2:  # 如果平均处理时长小于 2 小时，
+        work_order_subtitle = "平均处理时长 <2h"  # 就返回小于 2 小时文案。
+    else:  # 如果平均处理时长大于等于 2 小时，
+        work_order_subtitle = f"平均处理时长 {round(average_resolution_hours, 1)}h"  # 就返回带数值的处理时长文案。
+    cards = [  # 构造顶部四张 KPI 卡片。
+        DashboardKpiCard(  # 构造“今日总能耗”卡片。
+            key="daily_total_energy",  # 写入卡片键。
+            title="今日总能耗",  # 写入卡片标题。
+            value=latest_electricity,  # 写入卡片主值。
+            unit="kWh",  # 写入卡片单位。
+            change_rate=energy_change_rate,  # 写入卡片变化率。
+            subtitle=f"同比昨日 {format_change_rate_text(energy_change_rate)}",  # 写入卡片副标题。
+            status=energy_status,  # 写入卡片状态。
+            mini_bar=DashboardMiniBar(labels=day_labels, values=electricity_values),  # 写入卡片迷你柱状图。
+        ),  # 完成“今日总能耗”卡片构造。
+        DashboardKpiCard(  # 构造“实时 COP 值”卡片。
+            key="realtime_cop",  # 写入卡片键。
+            title="实时 COP 值",  # 写入卡片标题。
+            value=latest_cop,  # 写入卡片主值。
+            unit=None,  # COP 没有固定单位。
+            change_rate=cop_change_rate,  # 写入卡片变化率。
+            subtitle=cop_subtitle,  # 写入卡片副标题。
+            status=cop_status,  # 写入卡片状态。
+            mini_bar=DashboardMiniBar(labels=day_labels, values=cop_values),  # 写入卡片迷你柱状图。
+        ),  # 完成“实时 COP 值”卡片构造。
+        DashboardKpiCard(  # 构造“异常建筑数”卡片。
+            key="anomaly_buildings",  # 写入卡片键。
+            title="异常建筑数",  # 写入卡片标题。
+            value=float(latest_anomaly_buildings),  # 写入卡片主值。
+            unit="栋",  # 写入卡片单位。
+            change_rate=anomaly_change_rate,  # 写入卡片变化率。
+            subtitle=f"已处理 {latest_processed_count}，待处理 {latest_pending_work_orders}",  # 写入卡片副标题。
+            status=anomaly_status,  # 写入卡片状态。
+            mini_bar=DashboardMiniBar(labels=day_labels, values=[float(item) for item in anomaly_building_values]),  # 写入卡片迷你柱状图。
+        ),  # 完成“异常建筑数”卡片构造。
+        DashboardKpiCard(  # 构造“待处理工单”卡片。
+            key="pending_work_orders",  # 写入卡片键。
+            title="待处理工单",  # 写入卡片标题。
+            value=float(latest_pending_work_orders),  # 写入卡片主值。
+            unit="单",  # 写入卡片单位。
+            change_rate=pending_change_rate,  # 写入卡片变化率。
+            subtitle=work_order_subtitle,  # 写入卡片副标题。
+            status=work_order_status,  # 写入卡片状态。
+            mini_bar=DashboardMiniBar(labels=day_labels, values=[float(item) for item in pending_work_order_values]),  # 写入卡片迷你柱状图。
+        ),  # 完成“待处理工单”卡片构造。
+    ]  # 完成顶部 KPI 卡片列表构造。
+    bar_charts = [  # 构造 dashboard 需要的柱状图列表。
+        DashboardBarChart(key="daily_total_energy", title="今日总能耗柱状图", unit="kWh", labels=day_labels, values=electricity_values),  # 构造总电耗柱状图。
+        DashboardBarChart(key="realtime_cop", title="实时 COP 柱状图", unit=None, labels=day_labels, values=cop_values),  # 构造 COP 柱状图。
+        DashboardBarChart(key="anomaly_buildings", title="异常建筑数柱状图", unit="栋", labels=day_labels, values=[float(item) for item in anomaly_building_values]),  # 构造异常建筑柱状图。
+        DashboardBarChart(key="pending_work_orders", title="待处理工单柱状图", unit="单", labels=day_labels, values=[float(item) for item in pending_work_order_values]),  # 构造待处理工单柱状图。
+    ]  # 完成柱状图列表构造。
+    quick_link_stats = {  # 构造供快捷跳转和高亮模块复用的统计字典。
+        "anomaly_building_count": int(latest_anomaly_buildings),  # 写入最新异常建筑数。
+        "pending_work_order_count": int(latest_pending_work_orders),  # 写入最新待处理工单数。
+        "processed_event_count": int(latest_processed_count),  # 写入最新已处理事件数。
+        "average_resolution_hours": float(average_resolution_hours),  # 写入平均处理时长。
+    }  # 完成快捷统计字典构造。
+    return cards, bar_charts, quick_link_stats  # 返回顶部卡片、柱状图和快捷统计结果。
 
 
 def build_building_diagnostics(  # 定义构造楼栋级诊断结果的函数。
@@ -292,17 +645,27 @@ def build_dashboard_snapshot(  # 定义构造 dashboard 快照的函数。
     end_time: datetime | str | None,  # 接收结束时间参数。
     site_id: str | None,  # 接收站点编号参数。
     building_id: str | None,  # 接收建筑编号参数。
+    chart_range: DashboardChartRange | str | None,  # 接收图表范围参数。
 ) -> dict[str, Any]:  # 返回 dashboard 快照字典。
     scope_rows = get_dashboard_scope_rows(site_id, building_id)  # 先查询当前 dashboard 统计范围内的建筑清单。
     resolved_start, resolved_end = resolve_time_range(start_time, end_time, [building_id] if building_id else None, site_id, DEFAULT_DASHBOARD_METER)  # 按电耗口径补齐当前 dashboard 时间范围。
     current_start, current_end, previous_start, previous_end = normalize_dashboard_window(resolved_start, resolved_end)  # 构造当前周期和上一周期时间范围。
+    normalized_chart_range = normalize_dashboard_chart_range(chart_range)  # 标准化图表范围参数。
     diagnostics = build_building_diagnostics(get_dashboard_period_rows(current_start, current_end, previous_start, previous_end, site_id, building_id))  # 查询并构造楼栋诊断结果。
     anomalies = build_dashboard_anomalies(diagnostics)  # 基于诊断结果构造异常摘要列表。
     metrics = build_dashboard_metrics(scope_rows, diagnostics)  # 基于范围和诊断结果构造指标卡片列表。
+    metrics_by_key = {metric.key: metric for metric in metrics}  # 把指标卡片整理成按 key 查询的映射。
+    kpi_cards, bar_charts, quick_link_stats = build_dashboard_kpi_cards_and_bars(current_end, site_id, building_id)  # 构造顶部 KPI 卡片、柱状图和快捷统计信息。
+    quick_link_stats["warning_count"] = int(round((metrics_by_key.get("high_energy_buildings").value if metrics_by_key.get("high_energy_buildings") else 0)))  # 把高能耗预警数量写入快捷统计信息。
+    trend_chart = build_dashboard_trend_chart(current_end, site_id, building_id, normalized_chart_range)  # 构造折线图数据。
     ai_summary_hint = build_ai_summary_hint(diagnostics, anomalies, current_end)  # 基于诊断结果和时间范围构造规则摘要文本。
     return {  # 返回 dashboard 快照字典。
         "time_range": build_api_time_range(current_start, current_end),  # 写入带时区的当前周期时间范围。
         "metrics": metrics,  # 写入指标卡片列表。
+        "kpi_cards": kpi_cards,  # 写入顶部 KPI 卡片列表。
+        "trend_chart": trend_chart,  # 写入折线图数据。
+        "bar_charts": bar_charts,  # 写入柱状图列表。
+        "quick_link_stats": quick_link_stats,  # 写入快捷跳转统计信息。
         "diagnostics": diagnostics,  # 写入楼栋诊断结果列表，供 highlights 继续复用。
         "top_anomalies": anomalies,  # 写入异常摘要列表。
         "ai_summary_hint": ai_summary_hint,  # 写入规则摘要文本。
@@ -314,11 +677,17 @@ def get_dashboard_overview(  # 定义 dashboard 总览接口业务函数。
     end_time: datetime | str | None,  # 接收结束时间参数。
     site_id: str | None,  # 接收站点编号参数。
     building_id: str | None,  # 接收建筑编号参数。
+    chart_range: DashboardChartRange | str | None,  # 接收图表范围参数。
 ) -> DashboardOverviewResponse:  # 返回 dashboard 总览响应模型。
-    snapshot = build_dashboard_snapshot(start_time, end_time, site_id, building_id)  # 先构造完整 dashboard 快照。
+    snapshot = build_dashboard_snapshot(start_time, end_time, site_id, building_id, chart_range)  # 先构造完整 dashboard 快照。
+    quick_links = build_dashboard_highlight_items(snapshot, DASHBOARD_DEFAULT_LIMIT, snapshot.get("quick_link_stats"))  # 基于快照构造右侧快捷跳转列表。
     return DashboardOverviewResponse(  # 基于快照构造总览响应对象。
         time_range=snapshot["time_range"],  # 写入时间范围字段。
         metrics=snapshot["metrics"],  # 写入指标卡片列表字段。
+        kpi_cards=snapshot["kpi_cards"],  # 写入顶部 KPI 卡片列表字段。
+        trend_chart=snapshot["trend_chart"],  # 写入折线图字段。
+        bar_charts=snapshot["bar_charts"],  # 写入柱状图列表字段。
+        quick_links=quick_links,  # 写入右侧快捷跳转列表字段。
         top_anomalies=snapshot["top_anomalies"],  # 写入顶部异常列表字段。
         ai_summary_hint=snapshot["ai_summary_hint"],  # 写入规则摘要提示字段。
     )  # 完成 dashboard 总览响应构造。
@@ -327,20 +696,28 @@ def get_dashboard_overview(  # 定义 dashboard 总览接口业务函数。
 def build_dashboard_highlight_items(  # 定义构造 dashboard 高亮项列表的函数。
     snapshot: dict[str, Any],  # 接收 dashboard 快照字典。
     limit: int,  # 接收高亮项条数上限。
+    quick_link_stats: dict[str, int | float] | None = None,  # 接收快捷跳转统计信息。
 ) -> list[DashboardHighlight]:  # 返回高亮项模型列表。
     items: list[DashboardHighlight] = []  # 初始化高亮项列表。
     metrics_by_key = {metric.key: metric for metric in snapshot["metrics"]}  # 先把指标卡片整理成按 key 查询的映射。
     top_anomalies: list[AnomalySummary] = snapshot["top_anomalies"]  # 取出异常摘要列表，方便下面复用。
     diagnostics: list[dict[str, Any]] = snapshot["diagnostics"]  # 取出楼栋诊断结果，方便继续生成洞察和建议。
+    safe_stats = quick_link_stats or {}  # 把快捷统计信息兜底成字典，避免空值分支复杂化。
+    anomaly_count = int(safe_stats.get("anomaly_building_count") or len(top_anomalies))  # 读取异常建筑数量。
+    pending_count = int(safe_stats.get("pending_work_order_count") or 0)  # 读取待处理工单数量。
+    warning_count = int(safe_stats.get("warning_count") or 0)  # 读取高能耗预警数量。
+    processed_count = int(safe_stats.get("processed_event_count") or 0)  # 读取已处理事件数量。
     if top_anomalies:  # 如果存在异常摘要，
-        top_anomaly = top_anomalies[0]  # 就取第一条异常作为首条高亮。
+        top_anomaly = top_anomalies[0]  # 就取第一条异常作为首条快捷跳转。
         items.append(  # 追加异常型高亮项。
             DashboardHighlight(  # 创建异常型高亮对象。
                 type=DashboardHighlightType.anomaly,  # 写入高亮类型为 anomaly。
-                title=top_anomaly.title,  # 写入异常高亮标题。
-                description="该异常来自 dashboard 规则派生结果，建议优先进入异常分析页核查同周期负载变化。",  # 写入异常高亮描述。
+                title="异常状态工单",  # 写入异常卡片标题。
+                description=f"{anomaly_count} 个异常建筑待关注，最突出对象为 {top_anomaly.building_id}。",  # 写入异常卡片描述。
                 target="/energy/anomaly-analysis",  # 写入推荐跳转目标。
                 target_id=top_anomaly.building_id,  # 写入推荐跳转建筑编号。
+                level=DashboardQuickLinkLevel.critical,  # 写入异常卡片等级。
+                count=anomaly_count,  # 写入异常卡片数量。
             )  # 完成异常型高亮对象创建。
         )  # 完成异常型高亮追加。
     total_metric = metrics_by_key.get("electricity_total")  # 读取总电耗指标卡片。
@@ -350,22 +727,27 @@ def build_dashboard_highlight_items(  # 定义构造 dashboard 高亮项列表�
         items.append(  # 追加洞察型高亮项。
             DashboardHighlight(  # 创建洞察型高亮对象。
                 type=DashboardHighlightType.insight,  # 写入高亮类型为 insight。
-                title=f"总电耗较上一周期{trend_word}",  # 写入总电耗趋势标题。
-                description=f"当前范围总电耗为 {total_metric.value} {total_metric.unit or ''}，变化率为 {round(abs(change_rate) * 100, 2)}%。",  # 写入总电耗趋势描述。
+                title="警告状态",  # 写入洞察卡片标题。
+                description=f"当前范围总电耗较上一周期{trend_word}，共有 {warning_count} 个高能耗预警对象。",  # 写入洞察卡片描述。
                 target="/dashboard/overview",  # 写入建议返回总览页的目标。
                 target_id=None,  # 当前洞察不绑定特定建筑编号。
+                level=DashboardQuickLinkLevel.warning if warning_count > 0 else DashboardQuickLinkLevel.info,  # 根据预警数量判定洞察卡片等级。
+                count=warning_count,  # 写入洞察卡片数量。
             )  # 完成洞察型高亮对象创建。
         )  # 完成洞察型高亮追加。
-    high_energy_items = [item for item in diagnostics if item["is_high_energy"]]  # 取出所有高能耗建筑结果，方便生成建议项。
-    if high_energy_items:  # 如果存在高能耗建筑，
-        focus_item = high_energy_items[0]  # 就取最需要优先处理的一栋楼。
+    high_energy_items = [item for item in diagnostics if item["is_high_energy"]]  # 取出所有高能耗建筑结果，方便生成任务建议项。
+    if high_energy_items or pending_count > 0:  # 如果存在高能耗对象或待处理工单，
+        focus_item = high_energy_items[0] if high_energy_items else None  # 优先取第一栋高能耗建筑作为推荐处理对象。
+        focus_building_id = focus_item["building_id"] if focus_item else None  # 读取推荐处理建筑编号。
         items.append(  # 追加任务建议型高亮项。
             DashboardHighlight(  # 创建任务型高亮对象。
                 type=DashboardHighlightType.task,  # 写入高亮类型为 task。
-                title=f"建议优先检查 {focus_item['building_id']}",  # 写入建议处理标题。
-                description=f"该建筑当前周期电耗为 {focus_item['current_total']} kWh，主要用途为 {focus_item['primaryspaceusage']}。",  # 写入建议处理描述。
-                target="/buildings/{buildingId}",  # 写入推荐跳转目标模板。
-                target_id=focus_item["building_id"],  # 写入推荐跳转建筑编号。
+                title="待处理工单",  # 写入任务卡片标题。
+                description=f"{pending_count} 个事件待处理，已处理 {processed_count} 个事件。",  # 写入任务卡片描述。
+                target="/meters",  # 写入推荐跳转目标。
+                target_id=focus_building_id,  # 写入推荐处理建筑编号（可空）。
+                level=DashboardQuickLinkLevel.warning if pending_count > 0 else DashboardQuickLinkLevel.info,  # 根据待处理数量判定任务卡片等级。
+                count=pending_count,  # 写入任务卡片数量。
             )  # 完成任务型高亮对象创建。
         )  # 完成任务型高亮追加。
     if not items:  # 如果前面的逻辑没有生成任何高亮项，
@@ -376,12 +758,21 @@ def build_dashboard_highlight_items(  # 定义构造 dashboard 高亮项列表�
                 description="默认 dashboard 规则未识别出明显高能耗建筑，可以继续查看趋势图和排行结果。",  # 写入兜底描述。
                 target="/dashboard/overview",  # 写入兜底跳转目标。
                 target_id=None,  # 兜底高亮不绑定具体编号。
+                level=DashboardQuickLinkLevel.info,  # 写入兜底卡片等级。
+                count=0,  # 写入兜底卡片数量。
             )  # 完成兜底洞察项对象创建。
         )  # 完成兜底洞察项追加。
     return items[:limit]  # 按条数上限截断并返回高亮项列表。
 
 
-def get_dashboard_highlights(limit: int | None) -> DashboardHighlightsResponse:  # 定义 dashboard 高亮接口业务函数。
+def get_dashboard_highlights(  # 定义 dashboard 高亮接口业务函数。
+    limit: int | None,  # 接收高亮条数参数。
+    start_time: datetime | str | None,  # 接收开始时间参数。
+    end_time: datetime | str | None,  # 接收结束时间参数。
+    site_id: str | None,  # 接收站点编号参数。
+    building_id: str | None,  # 接收建筑编号参数。
+    chart_range: DashboardChartRange | str | None,  # 接收图表范围参数。
+) -> DashboardHighlightsResponse:  # 返回 dashboard 高亮响应模型。
     safe_limit = max(1, min(limit or DASHBOARD_DEFAULT_LIMIT, 10))  # 给高亮条数做默认值和范围保护。
-    snapshot = build_dashboard_snapshot(None, None, None, None)  # 按默认全局范围构造 dashboard 快照。
-    return DashboardHighlightsResponse(items=build_dashboard_highlight_items(snapshot, safe_limit))  # 构造并返回高亮列表响应。
+    snapshot = build_dashboard_snapshot(start_time, end_time, site_id, building_id, chart_range)  # 按当前过滤范围构造 dashboard 快照。
+    return DashboardHighlightsResponse(items=build_dashboard_highlight_items(snapshot, safe_limit, snapshot.get("quick_link_stats")))  # 构造并返回高亮列表响应。
