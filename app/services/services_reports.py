@@ -17,7 +17,8 @@ from app.schemas.schemas_ai import AIReportSummaryRequest  # 导入 AI 报表请
 from app.schemas.schemas_ai import AIReportSummaryTrendInput  # 导入 AI 趋势输入模型。
 from app.schemas.schemas_common import TimeRange  # 导入统一时间范围模型。
 from app.schemas.schemas_energy import EnergyAnomalyAnalysisRequest  # 导入异常分析请求模型。
-from app.schemas.schemas_reports import AIInsight  # 导入报表内 AI 洞察模型。
+from app.schemas.schemas_reports import AIInsight
+from app.schemas.schemas_reports import DeleteReportResponse  # 导入报表内 AI 洞察模型。
 from app.schemas.schemas_reports import GenerateReportRequest  # 导入创建报表请求模型。
 from app.schemas.schemas_reports import GenerateReportResponse  # 导入创建报表响应模型。
 from app.schemas.schemas_reports import ReportDetailResponse  # 导入报表详情响应模型。
@@ -1077,3 +1078,31 @@ def get_report_export(report_id: str, export_format: str) -> tuple[str, str, str
     content_type = "text/markdown; charset=utf-8"  # 固定返回 Markdown 内容类型。
     filename = f"{report_id}.md"  # 固定返回 Markdown 文件名。
     return content, content_type, filename  # 返回导出内容、类型和文件名。
+
+
+def delete_report(report_id: str) -> DeleteReportResponse:
+    """删除一份已生成的报表记录。"""
+
+    row = fetch_one(
+        """
+        SELECT report_id
+        FROM reports
+        WHERE report_id = :report_id
+        """,
+        {"report_id": report_id},
+    )
+    if row is None:
+        raise ResourceNotFoundError(f"未找到报表 {report_id}")
+
+    execute_sql(
+        """
+        DELETE FROM reports
+        WHERE report_id = :report_id
+        """,
+        {"report_id": report_id},
+    )
+    return DeleteReportResponse(
+        report_id=report_id,
+        deleted=True,
+        message="报表已删除。",
+    )

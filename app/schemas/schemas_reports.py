@@ -75,3 +75,8 @@ class ReportDetailResponse(BaseModel):  # 定义报表详情响应模型。
     sections: list[ReportSection] = Field(default_factory=list)  # 报表分节列表。
     exports: list[ReportExport] = Field(default_factory=list)  # 可用导出格式列表。
     error_message: str | None = None  # 失败时错误信息。
+
+class DeleteReportResponse(BaseModel):
+    report_id: str = Field(..., description="被删除的报表 ID")
+    deleted: bool = Field(default=True, description="是否删除成功")
+    message: str = Field(..., description="删除结果说明")

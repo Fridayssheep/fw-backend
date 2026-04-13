@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from ai.backend.anomaly_service import analyze_anomaly_with_ai
 from ai.backend.feedback_service import submit_anomaly_feedback
 from ai.backend.ops_guide_service import get_ops_guide
+from ai.backend.qa_session_service import delete_session
 from ai.backend.qa_service import ask_ai_question
 from ai.backend.query_assistant_service import build_query_intent
 from ai.backend.report_summary_service import get_report_summary
@@ -24,12 +25,15 @@ from app.schemas.schemas_ai import AIOpsGuideRequest
 from app.schemas.schemas_ai import AIOpsGuideResponse
 from app.schemas.schemas_ai import AIQARequest
 from app.schemas.schemas_ai import AIQAResponse
+from app.schemas.schemas_ai import AIQASessionDeleteResponse
 from app.schemas.schemas_ai import AIQueryAssistantRequest
 from app.schemas.schemas_ai import AIQueryAssistantResponse
 from app.schemas.schemas_ai import AIReportSummaryRequest
 from app.schemas.schemas_ai import AIReportSummaryResponse
 from app.schemas.schemas_ai import AnomalyFeedbackRequest
 from app.schemas.schemas_ai import AnomalyFeedbackResponse
+from app.schemas.schemas_common import ErrorResponse
+from app.services.service_common import ResourceNotFoundError
 
 from app.core.events import broker
 
@@ -187,3 +191,18 @@ def ask_ai_question_api(payload: AIQARequest) -> AIQAResponse:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except (RagFlowUpstreamError, RagFlowInvalidResponseError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/ai/qa/sessions/{sessionId}",
+    response_model=AIQASessionDeleteResponse,
+    summary="删除 AI 历史会话",
+    responses={404: {"model": ErrorResponse}},
+)
+def delete_ai_qa_session_api(sessionId: str) -> AIQASessionDeleteResponse:
+    """删除一个 AI 历史会话，并级联清理对应消息记录。"""
+
+    try:
+        return delete_session(sessionId)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

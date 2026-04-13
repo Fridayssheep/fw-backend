@@ -8,7 +8,9 @@ from sqlalchemy import text
 
 from app.core.database import engine
 from app.schemas import AIQAContext
+from app.schemas import AIQASessionDeleteResponse
 from app.schemas import AIQAResponse
+from app.services.service_common import ResourceNotFoundError
 from app.services.service_common import get_timezone_now
 
 
@@ -441,3 +443,36 @@ def update_session_failure_state(
                 "updated_at": get_timezone_now(),
             },
         )
+
+
+def delete_session(session_id: str) -> AIQASessionDeleteResponse:
+    """删除 AI 对话会话，并级联删除其历史消息。"""
+
+    with engine.begin() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT session_id
+                FROM ai_qa_sessions
+                WHERE session_id = :session_id
+                """
+            ),
+            {"session_id": session_id},
+        ).mappings().first()
+        if not row:
+            raise ResourceNotFoundError(f"未找到 AI 会话 {session_id}")
+        connection.execute(
+            text(
+                """
+                DELETE FROM ai_qa_sessions
+                WHERE session_id = :session_id
+                """
+            ),
+            {"session_id": session_id},
+        )
+
+    return AIQASessionDeleteResponse(
+        session_id=session_id,
+        deleted=True,
+        message="AI 会话已删除。",
+    )

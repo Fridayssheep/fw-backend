@@ -471,3 +471,8 @@ class AIQAResponse(BaseModel):
     used_tools: list[AIUsedToolItem] = Field(default_factory=list, description="内部已使用工具")
     suggested_actions: list[AISuggestedAction] = Field(default_factory=list, description="建议前端动作")
     meta: AIQAMeta = Field(..., description="调用元信息")
+
+class AIQASessionDeleteResponse(BaseModel):
+    session_id: str = Field(..., description="被删除的 AI 会话 ID")
+    deleted: bool = Field(default=True, description="是否删除成功")
+    message: str = Field(..., description="删除结果说明")

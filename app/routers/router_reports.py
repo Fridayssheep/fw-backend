@@ -1,14 +1,18 @@
 from typing import Annotated  # 导入 Annotated，用于给查询参数补充描述元数据。
 
-from fastapi import APIRouter  # 导入 APIRouter，用于注册报表路由。
+from fastapi import APIRouter
+from fastapi import HTTPException  # 导入 APIRouter，用于注册报表路由。
 from fastapi import Query  # 导入 Query，用于声明查询参数规则。
 from fastapi import Request  # 导入 Request，用于读取当前服务基础 URL。
 from fastapi.responses import Response  # 导入 Response，用于直接返回下载附件。
 
-from app.schemas.schemas_common import ErrorResponse  # 导入统一错误响应模型。
+from app.schemas.schemas_common import ErrorResponse
+from app.schemas.schemas_reports import DeleteReportResponse  # 导入统一错误响应模型。
 from app.schemas.schemas_reports import GenerateReportRequest  # 导入报表生成请求模型。
 from app.schemas.schemas_reports import GenerateReportResponse  # 导入报表生成响应模型。
-from app.schemas.schemas_reports import ReportDetailResponse  # 导入报表详情响应模型。
+from app.schemas.schemas_reports import ReportDetailResponse
+from app.services.service_common import ResourceNotFoundError  # 导入报表详情响应模型。
+from app.services.services_reports import delete_report as delete_report_service
 from app.services.services_reports import generate_report as generate_report_service  # 导入报表生成服务函数。
 from app.services.services_reports import get_report_detail as get_report_detail_service  # 导入报表详情服务函数。
 from app.services.services_reports import get_report_export as get_report_export_service  # 导入报表导出服务函数。
@@ -39,3 +43,17 @@ def get_report_detail_api(  # 定义“查询报表详情/下载导出”接口�
         return Response(content=content, media_type=content_type, headers=headers)  # 返回下载响应。
     base_url = str(request.base_url).rstrip("/")  # 读取并规范化基础 URL（去掉末尾斜杠）。
     return get_report_detail_service(reportId, base_url)  # 调用服务层返回报表详情。
+
+
+@router.delete(
+    "/reports/{reportId}",
+    response_model=DeleteReportResponse,
+    summary="删除报表",
+    operation_id="deleteReport",
+    responses={404: {"model": ErrorResponse}},
+)
+def delete_report_api(reportId: str) -> DeleteReportResponse:
+    try:
+        return delete_report_service(reportId)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
