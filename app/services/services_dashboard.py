@@ -191,10 +191,10 @@ def build_dashboard_trend_context(  # 定义构造 dashboard 趋势图上下文�
 ) -> tuple[list[datetime], list[str], datetime, datetime, str]:  # 返回趋势点位时间列表、标签列表、查询开始、查询结束和 SQL 粒度。
     anchor_day_start = current_end.replace(hour=0, minute=0, second=0, microsecond=0)  # 把当前周期结束时间对齐到当天 00:00。
     if chart_range == DashboardChartRange.day:  # 如果当前是日视图，
-        point_times = [anchor_day_start + timedelta(hours=offset) for offset in (0, 4, 8, 12, 16, 20, 24)]  # 按 4 小时间隔构造 7 个折线点位。
-        labels = [point_time.strftime("%H:%M") for point_time in point_times[:-1]] + ["24:00"]  # 构造日视图标签并把最后一个标签固定成 24:00。
+        point_times = [anchor_day_start + timedelta(hours=offset) for offset in (0, 4, 8, 12, 16, 20, 23)]  # 构造 7 个当天折线点位，最后一个点固定为 23:00，避免跨到次日 00:00。
+        labels = [point_time.strftime("%H:%M") for point_time in point_times]  # 直接使用实际点位时间作为日视图标签，避免生成会跨天的 24:00 标签。
         query_start = point_times[0]  # 把查询开始时间设为当天 00:00。
-        query_end = point_times[-1] + timedelta(hours=1)  # 把查询结束时间稍微向后扩一小时，确保能覆盖 24:00 对应桶。
+        query_end = anchor_day_start + timedelta(days=1)  # 把查询结束时间严格限定为次日 00:00，避免把次日 00:00-01:00 数据计入当天最后一个点。
         return point_times, labels, query_start, query_end, "hour"  # 返回日视图需要的上下文信息。
     if chart_range == DashboardChartRange.week:  # 如果当前是周视图，
         chart_start = anchor_day_start - timedelta(days=6)  # 把趋势起点设为最近 7 天的第一天 00:00。
