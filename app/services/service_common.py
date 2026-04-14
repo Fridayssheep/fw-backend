@@ -7,7 +7,9 @@ from typing import Any  # 导入任意类型注解，方便描述松散结构。
 from zoneinfo import ZoneInfo  # 导入时区对象，方便统一转换到UTC+8标准时间。
 
 from app.core.database import build_in_clause  # 导入 IN 条件构造工具函数。
+from app.core.database import fetch_one  # 导入单行查询函数，方便查询表计时间范围等元信息。
 from app.core.database import fetch_scalar  # 导入单值查询函数。
+from app.schemas.schemas_common import DataStatus  # 导入通用数据状态枚举，方便统一表达缺失/估算/过滤。
 from app.schemas.schemas_common import TimeRange  # 导入时间范围模型。
 
 
@@ -251,6 +253,87 @@ def normalize_optional_int(value: Any) -> int | None:  # 定义把任意输入�
     if normalized_value is None:  # 如果浮点标准化后为空，
         return None  # 就直接返回空。
     return int(normalized_value)  # 返回转成整数后的结果。
+
+
+def round_optional_float(value: Any, digits: int = 4) -> float | None:  # 定义把可空数值安全四舍五入的函数。
+    normalized_value = normalize_optional_float(value)  # 先把原始值标准化成浮点数。
+    if normalized_value is None:  # 如果标准化后仍然为空，
+        return None  # 就直接返回空，避免把缺失值误写成 0。
+    return round(normalized_value, digits)  # 返回保留指定位数小数后的结果。
+
+
+def resolve_numeric_data_status(  # 定义统一判定数值数据状态的函数。
+    *,  # 强制后续参数必须使用关键字传参，避免调用时把语义传乱。
+    has_data: bool,  # 接收当前值是否真的有源数据支撑。
+    estimated: bool = False,  # 接收当前值是否属于估算值。
+    filtered: bool = False,  # 接收当前值是否因异常范围被过滤。
+) -> DataStatus:  # 返回统一的数据状态枚举。
+    if filtered:  # 如果当前值被规则过滤掉，
+        return DataStatus.filtered  # 就返回 filtered 状态。
+    if not has_data:  # 如果当前值没有任何源数据，
+        return DataStatus.missing  # 就返回 missing 状态。
+    if estimated:  # 如果当前值是基于规则估算得到，
+        return DataStatus.estimated  # 就返回 estimated 状态。
+    return DataStatus.valid  # 其余情况统一视为真实有效数据。
+
+
+def truncate_datetime_by_granularity(value: datetime, granularity: str) -> datetime:  # 定义按粒度截断时间的函数。
+    if granularity == "hour":  # 如果当前粒度是小时，
+        return value.replace(minute=0, second=0, microsecond=0)  # 就把时间对齐到整点。
+    if granularity == "day":  # 如果当前粒度是天，
+        return value.replace(hour=0, minute=0, second=0, microsecond=0)  # 就把时间对齐到当天 00:00。
+    if granularity == "week":  # 如果当前粒度是周，
+        day_start = value.replace(hour=0, minute=0, second=0, microsecond=0)  # 先把时间对齐到当天 00:00。
+        return day_start - timedelta(days=day_start.weekday())  # 再把时间回退到本周周一 00:00。
+    if granularity == "month":  # 如果当前粒度是月，
+        return value.replace(day=1, hour=0, minute=0, second=0, microsecond=0)  # 就把时间对齐到当月第一天 00:00。
+    return value.replace(hour=0, minute=0, second=0, microsecond=0)  # 其余非法值统一按天粒度处理。
+
+
+def advance_datetime_by_granularity(value: datetime, granularity: str) -> datetime:  # 定义按粒度推进时间的函数。
+    if granularity == "hour":  # 如果当前粒度是小时，
+        return value + timedelta(hours=1)  # 就向后推进 1 小时。
+    if granularity == "day":  # 如果当前粒度是天，
+        return value + timedelta(days=1)  # 就向后推进 1 天。
+    if granularity == "week":  # 如果当前粒度是周，
+        return value + timedelta(weeks=1)  # 就向后推进 1 周。
+    if granularity == "month":  # 如果当前粒度是月，
+        next_month_anchor = value.replace(day=28) + timedelta(days=4)  # 先稳定跳到下个月。
+        return next_month_anchor.replace(day=1, hour=0, minute=0, second=0, microsecond=0)  # 再回到下个月第一天 00:00。
+    return value + timedelta(days=1)  # 其余非法值统一按天推进。
+
+
+def build_expected_time_buckets(start_time: datetime, end_time: datetime, granularity: str) -> list[datetime]:  # 定义按粒度构造完整时间桶列表的函数。
+    if end_time < start_time:  # 如果结束时间早于开始时间，
+        return []  # 就直接返回空列表，避免后续死循环。
+    bucket_start = truncate_datetime_by_granularity(start_time, granularity)  # 先把开始时间对齐到对应粒度。
+    bucket_end = truncate_datetime_by_granularity(end_time, granularity)  # 再把结束时间对齐到对应粒度。
+    buckets: list[datetime] = []  # 初始化完整时间桶列表。
+    current_bucket = bucket_start  # 把当前游标设为起始时间桶。
+    while current_bucket <= bucket_end:  # 只要当前时间桶还没有超过结束时间桶，
+        buckets.append(current_bucket)  # 就把当前时间桶写入结果列表。
+        current_bucket = advance_datetime_by_granularity(current_bucket, granularity)  # 再推进到下一个时间桶。
+    return buckets  # 返回最终完整时间桶列表。
+
+
+def get_meter_time_bounds(building_id: str, meter: str) -> dict[str, Any]:  # 定义查询单个建筑单个表计时间范围的函数。
+    row = fetch_one(  # 查询当前建筑当前表计的最早时间、最晚时间和读数条数。
+        """
+        SELECT
+            MIN(timestamp) AS min_timestamp,
+            MAX(timestamp) AS max_timestamp,
+            COUNT(*) AS reading_count
+        FROM meter_readings
+        WHERE building_id = :building_id
+          AND meter = :meter
+        """,
+        {"building_id": building_id, "meter": meter},
+    ) or {}  # 如果完全查不到，就回退到空字典。
+    return {  # 返回统一结构，方便 COP 和其他时序接口复用。
+        "min_timestamp": row.get("min_timestamp"),  # 写入最早时间。
+        "max_timestamp": row.get("max_timestamp"),  # 写入最晚时间。
+        "reading_count": int(row.get("reading_count") or 0),  # 写入读数条数。
+    }  # 完成时间范围结果构造。
 
 
 def normalize_metadata_flag(value: Any) -> bool:  # 定义把元数据里是否有表计的字段转成布尔值的函数。

@@ -23,6 +23,7 @@ from .schemas_ai import AIQAReferenceChunk
 from .schemas_ai import AIQAReferenceDocAgg
 from .schemas_ai import AIQAMeta
 from .schemas_ai import AIQAContext
+from .schemas_ai import AIQASessionDeleteResponse
 from .schemas_ai import AIQARequest
 from .schemas_ai import AIQAReferences
 from .schemas_ai import AIQAResponse
@@ -138,6 +139,7 @@ __all__ = [
     "AIQAReferenceDocAgg",
     "AIQAContext",
     "AIQAMeta",
+    "AIQASessionDeleteResponse",
     "AIQARequest",
     "AIQAReferences",
     "AIQAResponse",

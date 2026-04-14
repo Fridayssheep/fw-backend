@@ -1,27 +1,33 @@
-from datetime import datetime
-from typing import Any
+from datetime import datetime  # 导入日期时间类型，方便定义能耗和 COP 时间字段。
+from typing import Any  # 导入任意类型注解，方便兼容动态 summary 结构。
 
-from pydantic import BaseModel
-from pydantic import Field
+from pydantic import BaseModel  # 导入 Pydantic 基类，方便定义 energy 相关响应模型。
+from pydantic import Field  # 导入字段定义函数，方便给列表字段设置默认值。
 
-from .schemas_common import Pagination
-from .schemas_common import TimeRange
-
-
-class EnergyPoint(BaseModel):
-    timestamp: datetime
-    building_id: str | None = None
-    meter: str | None = None
-    value: float
+from .schemas_common import DataStatus  # 导入通用数据状态枚举，方便区分缺失值和有效值。
+from .schemas_common import Pagination  # 导入分页模型，方便复用统一分页结构。
+from .schemas_common import TimeRange  # 导入时间范围模型，方便复用统一时间结构。
 
 
-class EnergySummary(BaseModel):
-    meter: str
-    total: float
-    average: float
-    peak: float
-    peak_time: datetime | None = None
-    unit: str | None = None
+class EnergyPoint(BaseModel):  # 定义能耗点位模型。
+    timestamp: datetime  # 定义点位时间字段。
+    building_id: str | None = None  # 定义建筑编号字段。
+    meter: str | None = None  # 定义表计类型字段。
+    value: float | None  # 定义点位数值字段，缺失时允许返回空值。
+    data_status: DataStatus = DataStatus.valid  # 定义点位数据状态字段。
+    data_note: str | None = None  # 定义点位数据说明字段。
+
+
+class EnergySummary(BaseModel):  # 定义能耗摘要模型。
+    meter: str  # 定义摘要对应的表计字段。
+    total: float | None  # 定义摘要总量字段，缺失时允许返回空值。
+    average: float | None  # 定义摘要均值字段，缺失时允许返回空值。
+    peak: float | None  # 定义摘要峰值字段，缺失时允许返回空值。
+    peak_time: datetime | None = None  # 定义摘要峰值时间字段。
+    unit: str | None = None  # 定义摘要单位字段。
+    data_status: DataStatus = DataStatus.valid  # 定义摘要数据状态字段。
+    reading_count: int = 0  # 定义摘要命中的真实读数条数字段。
+    data_note: str | None = None  # 定义摘要数据说明字段。
 
 
 class EnergySummaryResponse(BaseModel):
@@ -48,39 +54,51 @@ class EnergyTrendResponse(BaseModel):
     series: list[EnergySeries]
 
 
-class EnergyCompareItem(BaseModel):
-    building_id: str
-    metric: str
-    value: float
-    unit: str | None = None
+class EnergyCompareItem(BaseModel):  # 定义能耗对比项模型。
+    building_id: str  # 定义建筑编号字段。
+    metric: str  # 定义对比指标字段。
+    value: float | None  # 定义对比结果字段，缺失时允许返回空值。
+    unit: str | None = None  # 定义对比单位字段。
+    data_status: DataStatus = DataStatus.valid  # 定义对比项数据状态字段。
+    data_note: str | None = None  # 定义对比项数据说明字段。
 
 
 class EnergyCompareResponse(BaseModel):
     items: list[EnergyCompareItem]
 
 
-class EnergyRankingItem(BaseModel):
-    rank: int
-    building_id: str
-    value: float
-    unit: str | None = None
+class EnergyRankingItem(BaseModel):  # 定义能耗排行项模型。
+    rank: int  # 定义排名字段。
+    building_id: str  # 定义建筑编号字段。
+    value: float | None  # 定义排行结果字段，缺失时允许返回空值。
+    unit: str | None = None  # 定义排行单位字段。
+    data_status: DataStatus = DataStatus.valid  # 定义排行项数据状态字段。
 
 
 class EnergyRankingResponse(BaseModel):
     items: list[EnergyRankingItem]
 
 
-class CopPoint(BaseModel):
-    timestamp: datetime
-    cop: float
+class CopPoint(BaseModel):  # 定义 COP 点位模型。
+    timestamp: datetime  # 定义点位时间字段。
+    cop: float | None  # 定义代理 COP 数值字段，缺失或过滤时允许返回空值。
+    data_status: DataStatus = DataStatus.valid  # 定义点位数据状态字段。
+    electricity_value: float | None = None  # 定义当前时间桶电表聚合值字段。
+    chilledwater_value: float | None = None  # 定义当前时间桶冷冻水聚合值字段。
+    data_note: str | None = None  # 定义点位数据说明字段。
 
 
-class CopSummary(BaseModel):
-    avg_cop: float
-    min_cop: float
-    max_cop: float
-    calculation_mode: str
-    formula: str
+class CopSummary(BaseModel):  # 定义 COP 摘要模型。
+    avg_cop: float | None  # 定义平均代理 COP 字段。
+    min_cop: float | None  # 定义最小代理 COP 字段。
+    max_cop: float | None  # 定义最大代理 COP 字段。
+    calculation_mode: str  # 定义 COP 计算模式字段。
+    formula: str  # 定义 COP 公式说明字段。
+    data_status: DataStatus = DataStatus.valid  # 定义摘要数据状态字段。
+    valid_point_count: int = 0  # 定义有效点位数量字段。
+    missing_point_count: int = 0  # 定义缺失点位数量字段。
+    filtered_point_count: int = 0  # 定义过滤点位数量字段。
+    data_note: str | None = None  # 定义摘要数据说明字段。
 
 
 class CopAnalysisResponse(BaseModel):

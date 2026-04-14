@@ -20,15 +20,17 @@
 ## 部署
 
 
-### 1. 准备环境变量
+### 1. 准备环境变量与 AI 配置
 进入 `docker` 目录，将模板生成为实际的配置文件：
 ```bash
 cd docker
 cp .env.example .env
+cp ai_settings_example.json ai_settings.json
 ```
-修改`.env`文件中的数据库和LLM相关配置
+修改 `.env` 文件以配置数据库连接，并修改 `ai_settings.json` 来配置 LLM 和 RAGFlow 的相关节点、模型与密钥。
 
 ### 2. 构建并启动容器
+在 `docker` 目录下执行：
 ```bash
 docker compose up -d --build
 ```
@@ -42,7 +44,8 @@ docker compose up -d --build
 
 ## 本地测试与开发
 
-### 1. 构建数据库
+### 1. 运行数据库服务
+为了方便本地调试主程序，我们仍然使用 Docker 运行 PostgreSQL 和 PgAdmin：
 ```bash
 cd docker
 docker compose up -d db pgadmin
@@ -63,23 +66,18 @@ uv pip install -r requirements.txt
 ```bash
 conda create -n fw-backend python=3.12 && conda activate fw-backend && pip install uv && uv pip install -r requirements.txt
 ```
-### 3. 设置环境变量并运行
-复制 `.env.example` 里面的数据库和 LLM 相关配置，设为终端全局变量
+### 3. 设置配置文件并运行
+请将 `.env.example` 中的数据库配置设定为终端的全局变量（或者使用工具加载 `.env`）。
+
+同时，初始化运行时的 AI 配置文件：
+```bash
+# 回到项目根目录
+mkdir -p data/runtime
+cp docker/ai_settings_example.json data/runtime/ai_settings.json
+```
+根据你的实际环境情况修改 `data/runtime/ai_settings.json` 中的各 AI 密钥和服务地址。
 
 之后启动 Uvicorn：
 ```bash
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
-
----
-
-## 关于异常检测工具（开发中）
-
-
-在容器内或虚拟环境下运行如下脚本以对所有建筑进行异常数据分析：
-```bash
-python -m app.jobs.offline_anomaly_detector
-```
-或者，前端也可以直接调用后门的异步接口进行无阻塞挂载任务触发：`POST /ai/trigger-anomaly-detection`
-
----
