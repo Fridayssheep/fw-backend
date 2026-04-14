@@ -111,7 +111,7 @@ def get_runtime_ai_config_payload() -> dict[str, Any]:
     return {
         "llm": {
             "base_url": settings.llm_base_url,
-            "api_key": "",
+            "api_key": settings.llm_api_key,
             "api_key_configured": bool(settings.llm_api_key),
             "model": settings.llm_model,
             "timeout_seconds": settings.llm_timeout_seconds,
@@ -120,7 +120,7 @@ def get_runtime_ai_config_payload() -> dict[str, Any]:
         },
         "ragflow": {
             "api_url": settings.ragflow_api_url,
-            "api_key": "",
+            "api_key": settings.ragflow_api_key,
             "api_key_configured": bool(settings.ragflow_api_key),
             "timeout_seconds": settings.ragflow_timeout_seconds,
             "chat_model": settings.ragflow_chat_model,
