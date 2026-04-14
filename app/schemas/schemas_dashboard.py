@@ -4,6 +4,7 @@ from enum import Enum  # 导入枚举类型，方便约束 dashboard 的范围�
 from pydantic import BaseModel  # 导入 Pydantic 基类，方便定义响应模型。
 from pydantic import Field  # 导入字段定义函数，方便给列表字段设置默认值。
 
+from .schemas_common import DataStatus  # 导入通用数据状态枚举，方便区分缺失值和真实零值。
 from .schemas_common import MetricCard  # 导入通用指标卡片模型，方便复用现有返回结构。
 from .schemas_common import TimeRange  # 导入时间范围模型，方便复用现有时间口径。
 
@@ -35,18 +36,21 @@ class DashboardQuickLinkLevel(str, Enum):  # 定义 dashboard 快捷跳转卡片
 
 class DashboardMiniBar(BaseModel):  # 定义顶部卡片迷你柱状图模型。
     labels: list[str] = Field(default_factory=list)  # 定义迷你柱状图横轴标签列表字段。
-    values: list[float] = Field(default_factory=list)  # 定义迷你柱状图纵轴数值列表字段。
+    values: list[float | None] = Field(default_factory=list)  # 定义迷你柱状图纵轴数值列表字段，缺失时允许返回空值。
+    data_statuses: list[DataStatus] = Field(default_factory=list)  # 定义每个柱子的取值状态列表，方便前端区分缺失和真实零值。
 
 
 class DashboardKpiCard(BaseModel):  # 定义 dashboard 顶部 KPI 卡片模型。
     key: str  # 定义卡片键字段。
     title: str  # 定义卡片标题字段。
-    value: float  # 定义卡片主值字段。
+    value: float | None  # 定义卡片主值字段，缺失时允许返回空值。
     unit: str | None = None  # 定义卡片单位字段。
     change_rate: float | None = None  # 定义卡片变化率字段。
     subtitle: str = ""  # 定义卡片副标题字段。
     status: DashboardCardStatus = DashboardCardStatus.neutral  # 定义卡片状态字段。
     mini_bar: DashboardMiniBar = Field(default_factory=DashboardMiniBar)  # 定义卡片迷你柱状图字段。
+    data_status: DataStatus = DataStatus.valid  # 定义卡片数据状态字段，方便区分缺失值和有效值。
+    data_note: str | None = None  # 定义卡片数据说明字段，方便补充估算或过滤原因。
 
 
 class DashboardTrendSeries(BaseModel):  # 定义 dashboard 折线图序列模型。
@@ -54,7 +58,8 @@ class DashboardTrendSeries(BaseModel):  # 定义 dashboard 折线图序列模型
     name: str  # 定义序列名称字段。
     unit: str | None = None  # 定义序列单位字段。
     chart_type: str = "line"  # 定义序列图表类型字段。
-    values: list[float] = Field(default_factory=list)  # 定义序列数值列表字段。
+    values: list[float | None] = Field(default_factory=list)  # 定义序列数值列表字段，缺失时允许返回空值。
+    data_statuses: list[DataStatus] = Field(default_factory=list)  # 定义每个点位的数据状态列表。
 
 
 class DashboardTrendChart(BaseModel):  # 定义 dashboard 折线图模型。
@@ -68,7 +73,8 @@ class DashboardBarChart(BaseModel):  # 定义 dashboard 柱状图模型。
     title: str  # 定义柱状图标题字段。
     unit: str | None = None  # 定义柱状图单位字段。
     labels: list[str] = Field(default_factory=list)  # 定义柱状图横轴标签列表字段。
-    values: list[float] = Field(default_factory=list)  # 定义柱状图纵轴数值列表字段。
+    values: list[float | None] = Field(default_factory=list)  # 定义柱状图纵轴数值列表字段，缺失时允许返回空值。
+    data_statuses: list[DataStatus] = Field(default_factory=list)  # 定义柱状图每个柱子的状态列表。
 
 
 class AnomalySummary(BaseModel):  # 定义 dashboard 异常摘要模型。

@@ -21,7 +21,11 @@ from app.schemas.schemas_dashboard import DashboardTrendSeries  # 导入 dashboa
 from .service_common import ResourceNotFoundError  # 导入资源不存在异常，方便返回一致的 404 语义。
 from .service_common import build_api_time_range  # 导入接口时间范围构造函数，方便统一输出UTC+8时区。
 from .service_common import require_api_datetime  # 导入必填时间转换函数，方便输出 API 时间。
+from .service_common import resolve_numeric_data_status  # 导入统一数据状态判定函数，方便区分缺失值和真实零值。
 from .service_common import resolve_time_range  # 导入时间范围补齐函数，方便沿用现有默认时间逻辑。
+from .services_energy import COP_PROXY_GOOD_THRESHOLD  # 导入代理 COP 良好阈值，保证 dashboard 与 energy 口径一致。
+from .services_energy import COP_PROXY_WARNING_THRESHOLD  # 导入代理 COP 预警阈值，保证 dashboard 与 energy 口径一致。
+from .services_energy import calculate_proxy_cop  # 导入代理 COP 计算函数，复用 energy 的过滤与说明规则。
 
 
 DEFAULT_DASHBOARD_METER = "electricity"  # 定义 dashboard 默认以电耗作为主统计口径。
@@ -31,8 +35,8 @@ DASHBOARD_HIGH_ENERGY_MULTIPLIER = 1.25  # 定义高能耗建筑判定时相对�
 CARBON_FACTOR_KG_PER_KWH = 0.554  # 定义比赛版估算碳排时使用的固定电力排放因子。
 DASHBOARD_LIGHTING_ESTIMATE_RATIO = 0.22  # 定义照明能耗估算比例（无 lighting 表计时使用）。
 DASHBOARD_RECENT_DAYS = 7  # 定义顶部卡片默认回看天数。
-DASHBOARD_COP_GOOD_THRESHOLD = 3.0  # 定义 COP 良好阈值。
-DASHBOARD_COP_WARNING_THRESHOLD = 2.0  # 定义 COP 警告阈值。
+DASHBOARD_COP_GOOD_THRESHOLD = COP_PROXY_GOOD_THRESHOLD  # 定义 dashboard 复用 energy 的代理 COP 良好阈值。
+DASHBOARD_COP_WARNING_THRESHOLD = COP_PROXY_WARNING_THRESHOLD  # 定义 dashboard 复用 energy 的代理 COP 预警阈值。
 
 
 def build_dashboard_scope_filters(  # 定义构造 dashboard 范围过滤条件的函数。
@@ -117,6 +121,8 @@ def get_dashboard_period_rows(  # 定义查询 dashboard 双周期聚合结果�
             bm.site_id AS site_id,
             bm.primaryspaceusage AS primaryspaceusage,
             bm.sqm AS sqm,
+            COUNT(CASE WHEN mr.timestamp >= :current_start AND mr.timestamp <= :current_end THEN mr.meter_reading END) AS current_count,
+            COUNT(CASE WHEN mr.timestamp >= :previous_start AND mr.timestamp < :previous_end THEN mr.meter_reading END) AS previous_count,
             COALESCE(SUM(CASE WHEN mr.timestamp >= :current_start AND mr.timestamp <= :current_end THEN mr.meter_reading END), 0) AS current_total,
             COALESCE(SUM(CASE WHEN mr.timestamp >= :previous_start AND mr.timestamp < :previous_end THEN mr.meter_reading END), 0) AS previous_total,
             MAX(CASE WHEN mr.timestamp >= :current_start AND mr.timestamp <= :current_end THEN mr.timestamp END) AS latest_timestamp
@@ -152,7 +158,9 @@ def safe_divide(numerator: float, denominator: float) -> float:  # 定义安全�
     return round(numerator / denominator, 4)  # 返回保留四位小数的除法结果。
 
 
-def calculate_change_rate(current_value: float, previous_value: float) -> float | None:  # 定义变化率计算函数。
+def calculate_change_rate(current_value: float | None, previous_value: float | None) -> float | None:  # 定义变化率计算函数。
+    if current_value is None or previous_value is None:  # 如果当前值或上一值本身缺失，
+        return None  # 就直接返回空，避免把缺失值误算成变化率。
     if previous_value <= 0:  # 如果上一周期没有有效值，
         return None  # 就不返回变化率，避免错误放大。
     return round((current_value - previous_value) / previous_value, 4)  # 返回保留四位小数的变化率。
@@ -243,11 +251,16 @@ def build_dashboard_trend_chart(  # 定义构造 dashboard 折线图对象的函
     point_times, labels, query_start, query_end, bucket_granularity = build_dashboard_trend_context(current_end, chart_range)  # 先构造折线图上下文。
     trend_rows = get_dashboard_trend_rows(query_start, query_end, site_id, building_id, bucket_granularity)  # 查询折线图原始聚合数据。
     index_map = {point_time: index for index, point_time in enumerate(point_times)}  # 构造时间到索引的映射，方便 O(1) 回填序列值。
-    series_value_map: dict[str, list[float]] = {  # 初始化三条折线序列的值缓存。
-        "electricity": [0.0] * len(point_times),  # 初始化总能耗（电耗）序列。
-        "chilledwater": [0.0] * len(point_times),  # 初始化制冷能耗序列。
-        "lighting": [0.0] * len(point_times),  # 初始化照明能耗序列。
+    series_value_map = {  # 初始化三条折线序列的值缓存。
+        "electricity": [None] * len(point_times),  # 初始化总能耗（电耗）序列，缺失时间桶先显式标成空值。
+        "chilledwater": [None] * len(point_times),  # 初始化制冷能耗序列，缺失时间桶先显式标成空值。
+        "lighting": [None] * len(point_times),  # 初始化照明能耗序列，缺失时间桶先显式标成空值。
     }  # 完成序列缓存初始化。
+    series_status_map = {  # 初始化三条折线序列的状态缓存。
+        "electricity": [resolve_numeric_data_status(has_data=False)] * len(point_times),  # 初始化总能耗序列状态为 missing。
+        "chilledwater": [resolve_numeric_data_status(has_data=False)] * len(point_times),  # 初始化制冷能耗序列状态为 missing。
+        "lighting": [resolve_numeric_data_status(has_data=False)] * len(point_times),  # 初始化照明能耗序列状态为 missing。
+    }  # 完成状态缓存初始化。
     for row in trend_rows:  # 遍历每一条趋势聚合行。
         bucket_time = row.get("bucket_time")  # 读取当前行时间桶。
         meter_name = str(row.get("meter") or "")  # 读取当前行表计名称。
@@ -256,14 +269,18 @@ def build_dashboard_trend_chart(  # 定义构造 dashboard 折线图对象的函
         if meter_name not in series_value_map:  # 如果当前表计不是三条目标序列之一，
             continue  # 就跳过当前行。
         series_index = index_map[bucket_time]  # 获取当前时间桶对应的序列索引。
-        series_value_map[meter_name][series_index] = round(series_value_map[meter_name][series_index] + to_float(row.get("value")), 4)  # 把当前聚合值累计到目标序列。
+        current_value = series_value_map[meter_name][series_index] or 0.0  # 读取当前时间桶已累计值；此前缺失时从 0 开始累计。
+        series_value_map[meter_name][series_index] = round(current_value + to_float(row.get("value")), 4)  # 把当前聚合值累计到目标序列。
+        series_status_map[meter_name][series_index] = resolve_numeric_data_status(has_data=True)  # 当前时间桶命中真实数据后，状态改成 valid。
     lighting_values = series_value_map["lighting"]  # 读取照明序列原始值。
-    if max(lighting_values, default=0.0) <= 0:  # 如果当前数据源里没有 lighting 表计值，
-        lighting_values = [round(value * DASHBOARD_LIGHTING_ESTIMATE_RATIO, 4) for value in series_value_map["electricity"]]  # 就按电耗比例生成估算照明序列。
+    lighting_statuses = series_status_map["lighting"]  # 读取照明序列原始状态。
+    if not any(status == resolve_numeric_data_status(has_data=True) for status in lighting_statuses):  # 如果当前数据源里没有真实 lighting 表计值，
+        lighting_values = [round(value * DASHBOARD_LIGHTING_ESTIMATE_RATIO, 4) if value is not None else None for value in series_value_map["electricity"]]  # 就按电耗比例生成估算照明序列，并保留缺失时间桶。
+        lighting_statuses = [resolve_numeric_data_status(has_data=value is not None, estimated=value is not None) for value in lighting_values]  # 把估算后的照明序列状态标记成 estimated 或 missing。
     trend_series = [  # 构造前端折线图需要的序列列表。
-        DashboardTrendSeries(key="total_energy", name="总能耗", unit="kWh", chart_type="line", values=series_value_map["electricity"]),  # 构造总能耗折线序列。
-        DashboardTrendSeries(key="cooling_energy", name="制冷能耗", unit="kWh", chart_type="line", values=series_value_map["chilledwater"]),  # 构造制冷能耗折线序列。
-        DashboardTrendSeries(key="lighting_energy", name="照明能耗", unit="kWh", chart_type="line", values=lighting_values),  # 构造照明能耗折线序列。
+        DashboardTrendSeries(key="total_energy", name="总能耗", unit="kWh", chart_type="line", values=series_value_map["electricity"], data_statuses=series_status_map["electricity"]),  # 构造总能耗折线序列。
+        DashboardTrendSeries(key="cooling_energy", name="制冷能耗", unit="kWh", chart_type="line", values=series_value_map["chilledwater"], data_statuses=series_status_map["chilledwater"]),  # 构造制冷能耗折线序列。
+        DashboardTrendSeries(key="lighting_energy", name="照明能耗", unit="kWh", chart_type="line", values=lighting_values, data_statuses=lighting_statuses),  # 构造照明能耗折线序列。
     ]  # 完成折线图序列构造。
     return DashboardTrendChart(range=chart_range, labels=labels, series=trend_series)  # 返回完整折线图对象。
 
@@ -384,7 +401,9 @@ def format_change_rate_text(change_rate: float | None) -> str:  # 定义把变�
     return f"{sign}{round(abs(change_rate) * 100, 2)}%"  # 返回百分比文本。
 
 
-def resolve_cop_status(cop_value: float) -> tuple[DashboardCardStatus, str]:  # 定义根据 COP 值判定状态的函数。
+def resolve_cop_status(cop_value: float | None) -> tuple[DashboardCardStatus, str]:  # 定义根据 COP 值判定状态的函数。
+    if cop_value is None:  # 如果当前没有有效代理 COP，
+        return DashboardCardStatus.neutral, "共同区间数据不足"  # 就返回中性状态和缺失说明。
     if cop_value >= DASHBOARD_COP_GOOD_THRESHOLD:  # 如果 COP 达到良好阈值，
         return DashboardCardStatus.good, "运行状态良好"  # 就返回良好状态和文案。
     if cop_value >= DASHBOARD_COP_WARNING_THRESHOLD:  # 如果 COP 处于警告阈值和良好阈值之间，
@@ -401,8 +420,10 @@ def build_dashboard_kpi_cards_and_bars(  # 定义构造 dashboard 顶部卡片�
     day_index_map = {day_point: index for index, day_point in enumerate(day_points)}  # 构造日期到索引映射，方便回填数组。
     energy_rows = get_dashboard_recent_energy_rows(query_start, query_end, site_id, building_id)  # 查询近 N 天能耗聚合行。
     anomaly_rows = get_dashboard_recent_anomaly_rows(query_start, query_end, site_id, building_id)  # 查询近 N 天异常聚合行。
-    electricity_values = [0.0] * len(day_points)  # 初始化近 N 天日电耗序列。
-    cooling_values = [0.0] * len(day_points)  # 初始化近 N 天日制冷能耗序列。
+    electricity_values = [None] * len(day_points)  # 初始化近 N 天日电耗序列，缺失日期先显式标成空值。
+    cooling_values = [None] * len(day_points)  # 初始化近 N 天日制冷能耗序列，缺失日期先显式标成空值。
+    electricity_statuses = [resolve_numeric_data_status(has_data=False)] * len(day_points)  # 初始化日电耗序列状态为 missing。
+    cooling_statuses = [resolve_numeric_data_status(has_data=False)] * len(day_points)  # 初始化日制冷序列状态为 missing。
     for row in energy_rows:  # 遍历每一条近 N 天能耗聚合行。
         bucket_day = row.get("bucket_day")  # 读取当前行日期桶。
         meter_name = str(row.get("meter") or "")  # 读取当前行表计名称。
@@ -410,10 +431,24 @@ def build_dashboard_kpi_cards_and_bars(  # 定义构造 dashboard 顶部卡片�
             continue  # 就跳过当前行。
         value_index = day_index_map[bucket_day]  # 获取当前日期桶索引。
         if meter_name == "electricity":  # 如果当前行是电耗，
-            electricity_values[value_index] = round(electricity_values[value_index] + to_float(row.get("value")), 4)  # 就累计到电耗序列。
+            electricity_values[value_index] = round((electricity_values[value_index] or 0.0) + to_float(row.get("value")), 4)  # 就累计到电耗序列；此前缺失时从 0 开始累计。
+            electricity_statuses[value_index] = resolve_numeric_data_status(has_data=True)  # 当前日期命中真实电耗数据后，状态改成 valid。
         elif meter_name == "chilledwater":  # 如果当前行是制冷能耗，
-            cooling_values[value_index] = round(cooling_values[value_index] + to_float(row.get("value")), 4)  # 就累计到制冷序列。
-    cop_values = [safe_divide(cooling_value, electricity_value) if electricity_value > 0 else 0.0 for cooling_value, electricity_value in zip(cooling_values, electricity_values)]  # 计算近 N 天 COP 序列。
+            cooling_values[value_index] = round((cooling_values[value_index] or 0.0) + to_float(row.get("value")), 4)  # 就累计到制冷序列；此前缺失时从 0 开始累计。
+            cooling_statuses[value_index] = resolve_numeric_data_status(has_data=True)  # 当前日期命中真实制冷数据后，状态改成 valid。
+    cop_values: list[float | None] = []  # 初始化近 N 天代理 COP 序列。
+    cop_statuses = []  # 初始化近 N 天代理 COP 状态序列。
+    cop_notes: list[str | None] = []  # 初始化近 N 天代理 COP 说明序列。
+    for electricity_value, cooling_value, electricity_state, cooling_state in zip(electricity_values, cooling_values, electricity_statuses, cooling_statuses):  # 并行遍历日电耗、制冷值和状态。
+        if electricity_state != resolve_numeric_data_status(has_data=True) or cooling_state != resolve_numeric_data_status(has_data=True):  # 如果任意一方缺少真实源数据，
+            cop_values.append(None)  # 就把当前日期代理 COP 显式写成空值。
+            cop_statuses.append(resolve_numeric_data_status(has_data=False))  # 并把状态标记成 missing。
+            cop_notes.append("当前日期未同时命中 electricity 和 chilledwater 数据。")  # 记录缺失说明。
+            continue  # 继续处理下一天。
+        cop_value, cop_note = calculate_proxy_cop(electricity_value, cooling_value)  # 使用 energy 的统一规则计算当天代理 COP。
+        cop_values.append(cop_value)  # 写入当天代理 COP 值；如果被过滤则为空。
+        cop_statuses.append(resolve_numeric_data_status(has_data=cop_value is not None, estimated=cop_value is not None, filtered=cop_value is None))  # 写入当天代理 COP 的状态。
+        cop_notes.append(cop_note)  # 写入当天代理 COP 的说明文本。
     anomaly_building_values = [0] * len(day_points)  # 初始化近 N 天异常建筑数序列。
     pending_work_order_values = [0] * len(day_points)  # 初始化近 N 天待处理工单数序列。
     anomaly_event_values = [0] * len(day_points)  # 初始化近 N 天异常事件总数序列。
@@ -427,14 +462,17 @@ def build_dashboard_kpi_cards_and_bars(  # 定义构造 dashboard 顶部卡片�
         anomaly_event_values[value_index] = int(row.get("event_count") or 0)  # 写入当前日期的异常事件总数。
     latest_index = len(day_points) - 1  # 计算最新一天索引。
     previous_index = max(latest_index - 1, 0)  # 计算前一天索引（防止越界）。
-    latest_electricity = electricity_values[latest_index] if electricity_values else 0.0  # 读取最新一天总电耗。
-    previous_electricity = electricity_values[previous_index] if electricity_values else 0.0  # 读取前一天总电耗。
+    latest_electricity = electricity_values[latest_index] if electricity_values else None  # 读取最新一天总电耗；如果缺失则返回空值。
+    previous_electricity = electricity_values[previous_index] if electricity_values else None  # 读取前一天总电耗；如果缺失则返回空值。
     energy_change_rate = calculate_change_rate(latest_electricity, previous_electricity)  # 计算总电耗相对前一天变化率。
-    energy_status = DashboardCardStatus.warning if (energy_change_rate or 0.0) > 0.08 else DashboardCardStatus.good if latest_electricity > 0 else DashboardCardStatus.neutral  # 根据变化幅度判定总电耗卡片状态。
-    latest_cop = cop_values[latest_index] if cop_values else 0.0  # 读取最新一天 COP。
-    previous_cop = cop_values[previous_index] if cop_values else 0.0  # 读取前一天 COP。
+    latest_energy_data_status = electricity_statuses[latest_index] if electricity_statuses else resolve_numeric_data_status(has_data=False)  # 读取最新一天总电耗的数据状态。
+    energy_status = DashboardCardStatus.warning if latest_electricity is not None and (energy_change_rate or 0.0) > 0.08 else DashboardCardStatus.good if latest_electricity is not None else DashboardCardStatus.neutral  # 根据变化幅度和缺失情况判定总电耗卡片状态。
+    latest_cop = cop_values[latest_index] if cop_values else None  # 读取最新一天代理 COP。
+    previous_cop = cop_values[previous_index] if cop_values else None  # 读取前一天代理 COP。
     cop_change_rate = calculate_change_rate(latest_cop, previous_cop)  # 计算 COP 相对前一天变化率。
     cop_status, cop_subtitle = resolve_cop_status(latest_cop)  # 根据最新 COP 判定状态和副标题。
+    latest_cop_data_status = cop_statuses[latest_index] if cop_statuses else resolve_numeric_data_status(has_data=False)  # 读取最新一天代理 COP 的数据状态。
+    latest_cop_note = cop_notes[latest_index] if cop_notes else None  # 读取最新一天代理 COP 的说明文本。
     latest_anomaly_buildings = anomaly_building_values[latest_index] if anomaly_building_values else 0  # 读取最新一天异常建筑数。
     previous_anomaly_buildings = anomaly_building_values[previous_index] if anomaly_building_values else 0  # 读取前一天异常建筑数。
     anomaly_change_rate = calculate_change_rate(float(latest_anomaly_buildings), float(previous_anomaly_buildings))  # 计算异常建筑数变化率。
@@ -461,18 +499,22 @@ def build_dashboard_kpi_cards_and_bars(  # 定义构造 dashboard 顶部卡片�
             change_rate=energy_change_rate,  # 写入卡片变化率。
             subtitle=f"同比昨日 {format_change_rate_text(energy_change_rate)}",  # 写入卡片副标题。
             status=energy_status,  # 写入卡片状态。
-            mini_bar=DashboardMiniBar(labels=day_labels, values=electricity_values),  # 写入卡片迷你柱状图。
+            mini_bar=DashboardMiniBar(labels=day_labels, values=electricity_values, data_statuses=electricity_statuses),  # 写入卡片迷你柱状图，并明确每一天的数据状态。
+            data_status=latest_energy_data_status,  # 写入当前卡片的数据状态。
+            data_note=None if latest_electricity is not None else "最新日期没有 electricity 数据。",  # 在缺失时补充明确说明。
         ),  # 完成“今日总能耗”卡片构造。
-        DashboardKpiCard(  # 构造“实时 COP 值”卡片。
+        DashboardKpiCard(  # 构造“实时 COP 代理值”卡片。
             key="realtime_cop",  # 写入卡片键。
-            title="实时 COP 值",  # 写入卡片标题。
+            title="实时 COP 代理值",  # 写入卡片标题。
             value=latest_cop,  # 写入卡片主值。
             unit=None,  # COP 没有固定单位。
             change_rate=cop_change_rate,  # 写入卡片变化率。
             subtitle=cop_subtitle,  # 写入卡片副标题。
             status=cop_status,  # 写入卡片状态。
-            mini_bar=DashboardMiniBar(labels=day_labels, values=cop_values),  # 写入卡片迷你柱状图。
-        ),  # 完成“实时 COP 值”卡片构造。
+            mini_bar=DashboardMiniBar(labels=day_labels, values=cop_values, data_statuses=cop_statuses),  # 写入卡片迷你柱状图，并明确每一天的代理 COP 状态。
+            data_status=latest_cop_data_status,  # 写入当前卡片的数据状态。
+            data_note=latest_cop_note,  # 写入当前卡片的计算说明或过滤原因。
+        ),  # 完成“实时 COP 代理值”卡片构造。
         DashboardKpiCard(  # 构造“异常建筑数”卡片。
             key="anomaly_buildings",  # 写入卡片键。
             title="异常建筑数",  # 写入卡片标题。
@@ -495,8 +537,8 @@ def build_dashboard_kpi_cards_and_bars(  # 定义构造 dashboard 顶部卡片�
         ),  # 完成“待处理工单”卡片构造。
     ]  # 完成顶部 KPI 卡片列表构造。
     bar_charts = [  # 构造 dashboard 需要的柱状图列表。
-        DashboardBarChart(key="daily_total_energy", title="今日总能耗柱状图", unit="kWh", labels=day_labels, values=electricity_values),  # 构造总电耗柱状图。
-        DashboardBarChart(key="realtime_cop", title="实时 COP 柱状图", unit=None, labels=day_labels, values=cop_values),  # 构造 COP 柱状图。
+        DashboardBarChart(key="daily_total_energy", title="今日总能耗柱状图", unit="kWh", labels=day_labels, values=electricity_values, data_statuses=electricity_statuses),  # 构造总电耗柱状图，并明确每天的数据状态。
+        DashboardBarChart(key="realtime_cop", title="实时 COP 代理值柱状图", unit=None, labels=day_labels, values=cop_values, data_statuses=cop_statuses),  # 构造代理 COP 柱状图，并明确每天的数据状态。
         DashboardBarChart(key="anomaly_buildings", title="异常建筑数柱状图", unit="栋", labels=day_labels, values=[float(item) for item in anomaly_building_values]),  # 构造异常建筑柱状图。
         DashboardBarChart(key="pending_work_orders", title="待处理工单柱状图", unit="单", labels=day_labels, values=[float(item) for item in pending_work_order_values]),  # 构造待处理工单柱状图。
     ]  # 完成柱状图列表构造。
@@ -513,7 +555,7 @@ def build_building_diagnostics(  # 定义构造楼栋级诊断结果的函数。
     period_rows: list[dict[str, Any]],  # 接收按建筑聚合后的双周期结果列表。
 ) -> list[dict[str, Any]]:  # 返回包含异常判定信息的中间结果列表。
     diagnostics: list[dict[str, Any]] = []  # 初始化楼栋诊断结果列表。
-    active_rows = [row for row in period_rows if to_float(row.get("current_total")) > 0]  # 先筛出当前周期有电耗数据的建筑。
+    active_rows = [row for row in period_rows if int(row.get("current_count") or 0) > 0]  # 先筛出当前周期真实命中过电耗读数的建筑，避免把真实 0 误判成缺失。
     active_eui_values = [safe_divide(to_float(row.get("current_total")), to_float(row.get("sqm"))) for row in active_rows if to_float(row.get("sqm")) > 0]  # 计算所有活跃建筑的当前周期 EUI 列表。
     peer_average_eui = safe_divide(sum(active_eui_values), float(len(active_eui_values))) if active_eui_values else 0.0  # 计算当前范围的平均 EUI，作为多建筑场景的同群基线。
     usage_eui_map: dict[str, list[float]] = {}  # 初始化按建筑用途分组保存 EUI 的映射字典。
@@ -528,6 +570,8 @@ def build_building_diagnostics(  # 定义构造楼栋级诊断结果的函数。
     usage_average_map = {usage_key: safe_divide(sum(values), float(len(values))) for usage_key, values in usage_eui_map.items() if values}  # 计算每种建筑用途下的平均 EUI。
     single_scope_mode = len(active_rows) <= 1  # 判断当前范围是否更接近单建筑分析场景。
     for row in period_rows:  # 遍历每一栋建筑的聚合结果。
+        current_count = int(row.get("current_count") or 0)  # 读取当前周期真实命中的电耗读数条数。
+        previous_count = int(row.get("previous_count") or 0)  # 读取上一周期真实命中的电耗读数条数。
         current_total = to_float(row.get("current_total"))  # 读取当前周期总电耗。
         previous_total = to_float(row.get("previous_total"))  # 读取上一周期总电耗。
         sqm_value = to_float(row.get("sqm"))  # 读取建筑面积。
@@ -539,12 +583,12 @@ def build_building_diagnostics(  # 定义构造楼栋级诊断结果的函数。
         is_high_energy = False  # 先默认当前建筑不属于高能耗建筑。
         deviation_rate = 0.0  # 先默认偏离率为零。
         anomaly_title = ""  # 先初始化异常标题为空字符串。
-        if current_total > 0 and single_scope_mode and previous_total > 0:  # 如果当前是单建筑场景且上一周期也有数据，
+        if current_count > 0 and single_scope_mode and previous_count > 0:  # 如果当前是单建筑场景且前后两个周期都真实命中过数据，
             deviation_rate = max(calculate_change_rate(current_eui or current_total, previous_eui or previous_total) or 0.0, 0.0)  # 就按同建筑前后周期变化率做异常偏离率。
             is_high_energy = deviation_rate >= (DASHBOARD_HIGH_ENERGY_MULTIPLIER - 1)  # 如果增长超过约定阈值，就标记为高能耗。
             if is_high_energy:  # 如果该建筑确实触发了高能耗判定，
                 anomaly_title = f"{row['building_id']} 电耗较上一周期上升 {round(deviation_rate * 100, 2)}%"  # 生成单建筑场景下的异常标题。
-        elif current_total > 0 and current_eui > 0 and comparison_baseline_eui > 0:  # 如果是多建筑场景且能拿到有效 EUI 基线，
+        elif current_count > 0 and current_eui > 0 and comparison_baseline_eui > 0:  # 如果是多建筑场景且当前周期真实有数据并能拿到有效 EUI 基线，
             deviation_rate = max((current_eui - comparison_baseline_eui) / comparison_baseline_eui, 0.0)  # 就按当前 EUI 相对基线的偏离率做判定。
             is_high_energy = current_eui >= round(comparison_baseline_eui * DASHBOARD_HIGH_ENERGY_MULTIPLIER, 4)  # 如果当前 EUI 超过基线阈值倍数，就标记为高能耗。
             if is_high_energy:  # 如果该建筑确实触发了高能耗判定，
@@ -556,6 +600,8 @@ def build_building_diagnostics(  # 定义构造楼栋级诊断结果的函数。
                 "site_id": str(row["site_id"]),  # 写入站点编号。
                 "primaryspaceusage": str(row.get("primaryspaceusage") or "Unknown"),  # 写入建筑主要用途。
                 "sqm": sqm_value,  # 写入建筑面积。
+                "current_count": current_count,  # 写入当前周期真实命中的读数条数。
+                "previous_count": previous_count,  # 写入上一周期真实命中的读数条数。
                 "current_total": current_total,  # 写入当前周期总电耗。
                 "previous_total": previous_total,  # 写入上一周期总电耗。
                 "current_eui": current_eui,  # 写入当前周期 EUI。
@@ -579,10 +625,10 @@ def build_dashboard_metrics(  # 定义构造 dashboard 指标卡片列表的函�
 ) -> list[MetricCard]:  # 返回 dashboard 指标卡片列表。
     scoped_building_count = len(scope_rows)  # 统计当前范围内的建筑总数。
     scoped_site_count = len({str(row["site_id"]) for row in scope_rows})  # 统计当前范围覆盖的站点数量。
-    current_active_buildings = [item for item in diagnostics if item["current_total"] > 0]  # 取出当前周期有电耗数据的建筑列表。
-    previous_active_buildings = [item for item in diagnostics if item["previous_total"] > 0]  # 取出上一周期有电耗数据的建筑列表。
-    current_total = round(sum(item["current_total"] for item in diagnostics), 4)  # 计算当前周期总电耗。
-    previous_total = round(sum(item["previous_total"] for item in diagnostics), 4)  # 计算上一周期总电耗。
+    current_active_buildings = [item for item in diagnostics if item["current_count"] > 0]  # 取出当前周期真实命中过电耗读数的建筑列表。
+    previous_active_buildings = [item for item in diagnostics if item["previous_count"] > 0]  # 取出上一周期真实命中过电耗读数的建筑列表。
+    current_total = round(sum(item["current_total"] for item in current_active_buildings), 4)  # 只汇总当前周期真实有数据的建筑总电耗，避免把缺失值混进统计。
+    previous_total = round(sum(item["previous_total"] for item in previous_active_buildings), 4)  # 只汇总上一周期真实有数据的建筑总电耗。
     current_active_area = round(sum(item["sqm"] for item in current_active_buildings if item["sqm"] > 0), 4)  # 计算当前周期活跃建筑总面积。
     previous_active_area = round(sum(item["sqm"] for item in previous_active_buildings if item["sqm"] > 0), 4)  # 计算上一周期活跃建筑总面积。
     current_eui = safe_divide(current_total, current_active_area)  # 计算当前周期电耗 EUI。
@@ -594,9 +640,9 @@ def build_dashboard_metrics(  # 定义构造 dashboard 指标卡片列表的函�
         MetricCard(key="scoped_buildings", label="纳管建筑数", value=float(scoped_building_count), unit="count"),  # 返回纳管建筑数卡片。
         MetricCard(key="scoped_sites", label="覆盖站点数", value=float(scoped_site_count), unit="count"),  # 返回覆盖站点数卡片。
         MetricCard(key="active_buildings", label="本期活跃建筑", value=float(len(current_active_buildings)), unit="count", change_rate=calculate_change_rate(float(len(current_active_buildings)), float(len(previous_active_buildings)))),  # 返回活跃建筑数卡片。
-        MetricCard(key="electricity_total", label="本期总电耗", value=current_total, unit="kWh", change_rate=calculate_change_rate(current_total, previous_total)),  # 返回总电耗卡片。
-        MetricCard(key="electricity_eui", label="本期电耗EUI", value=current_eui, unit="kWh/sqm", change_rate=calculate_change_rate(current_eui, previous_eui)),  # 返回电耗 EUI 卡片。
-        MetricCard(key="estimated_carbon", label="估算碳排", value=current_carbon, unit="kgCO2e", change_rate=calculate_change_rate(current_carbon, previous_carbon)),  # 返回估算碳排卡片。
+        MetricCard(key="electricity_total", label="本期总电耗", value=current_total if current_active_buildings else None, unit="kWh", change_rate=calculate_change_rate(current_total if current_active_buildings else None, previous_total if previous_active_buildings else None), data_status=resolve_numeric_data_status(has_data=bool(current_active_buildings)), data_note=None if current_active_buildings else "当前筛选范围内没有命中的 electricity 数据。"),  # 返回总电耗卡片，并明确区分缺失与真实零值。
+        MetricCard(key="electricity_eui", label="本期电耗EUI", value=current_eui if current_active_area > 0 else None, unit="kWh/sqm", change_rate=calculate_change_rate(current_eui if current_active_area > 0 else None, previous_eui if previous_active_area > 0 else None), data_status=resolve_numeric_data_status(has_data=current_active_area > 0), data_note=None if current_active_area > 0 else "当前筛选范围缺少有效面积或 electricity 数据，无法计算 EUI。"),  # 返回电耗 EUI 卡片，并明确区分缺失与真实零值。
+        MetricCard(key="estimated_carbon", label="估算碳排", value=current_carbon if current_active_buildings else None, unit="kgCO2e", change_rate=calculate_change_rate(current_carbon if current_active_buildings else None, previous_carbon if previous_active_buildings else None), data_status=resolve_numeric_data_status(has_data=bool(current_active_buildings), estimated=bool(current_active_buildings)), data_note=None if current_active_buildings else "当前筛选范围内没有命中的 electricity 数据，无法估算碳排。"),  # 返回估算碳排卡片，并明确区分缺失与真实零值。
         MetricCard(key="high_energy_buildings", label="高能耗建筑数", value=float(high_energy_count), unit="count"),  # 返回高能耗建筑数卡片。
     ]  # 完成指标卡片列表构造。
 
@@ -632,7 +678,7 @@ def build_ai_summary_hint(  # 定义构造 dashboard 规则摘要提示的函数
     anomalies: list[AnomalySummary],  # 接收异常摘要列表。
     current_end: datetime,  # 接收当前周期结束时间。
 ) -> str:  # 返回给前端展示的规则摘要提示文本。
-    active_building_count = len([item for item in diagnostics if item["current_total"] > 0])  # 统计当前周期活跃建筑数量。
+    active_building_count = len([item for item in diagnostics if item["current_count"] > 0])  # 统计当前周期真实命中过电耗读数的活跃建筑数量。
     latest_time_text = require_api_datetime(current_end).strftime("%Y-%m-%d %H:%M:%S %z")  # 把当前周期结束时间格式化成明确日期文本。
     if anomalies:  # 如果当前已经识别出高能耗异常，
         top_anomaly = anomalies[0]  # 取排序最靠前的一条异常作为摘要核心对象。

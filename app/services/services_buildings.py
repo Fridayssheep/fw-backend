@@ -24,7 +24,9 @@ from .service_common import normalize_optional_float  # 导入标准化浮点数
 from .service_common import normalize_optional_int  # 导入标准化整数的函数。
 from .service_common import normalize_pagination  # 导入标准化分页参数的函数。
 from .service_common import normalize_text  # 导入标准化文本的函数。
+from .service_common import resolve_numeric_data_status  # 导入统一数据状态判定函数，方便区分缺失值和真实零值。
 from .service_common import resolve_time_range  # 导入补齐时间范围的函数。
+from .service_common import round_optional_float  # 导入可空数值四舍五入函数，避免把缺失值误写成 0。
 from .services_energy import build_summary  # 导入能耗摘要构造函数。
 
 
@@ -148,11 +150,13 @@ def get_meter_window_statistics(building_id: str, meter: str, window_days: int =
     stats_row = fetch_one(  # 用单条 SQL 同时查询当前窗口和上一窗口的关键统计值。
         """
         SELECT
-            COALESCE(SUM(CASE WHEN timestamp >= :current_start AND timestamp <= :current_end THEN meter_reading END), 0) AS current_total,
-            COALESCE(SUM(CASE WHEN timestamp >= :previous_start AND timestamp < :previous_end THEN meter_reading END), 0) AS previous_total,
-            COALESCE(AVG(CASE WHEN timestamp >= :current_start AND timestamp <= :current_end THEN meter_reading END), 0) AS current_average,
-            COALESCE(AVG(CASE WHEN timestamp >= :previous_start AND timestamp < :previous_end THEN meter_reading END), 0) AS previous_average,
-            COALESCE(MAX(CASE WHEN timestamp >= :current_start AND timestamp <= :current_end THEN meter_reading END), 0) AS current_peak
+            COUNT(CASE WHEN timestamp >= :current_start AND timestamp <= :current_end THEN meter_reading END) AS current_count,
+            COUNT(CASE WHEN timestamp >= :previous_start AND timestamp < :previous_end THEN meter_reading END) AS previous_count,
+            SUM(CASE WHEN timestamp >= :current_start AND timestamp <= :current_end THEN meter_reading END) AS current_total,
+            SUM(CASE WHEN timestamp >= :previous_start AND timestamp < :previous_end THEN meter_reading END) AS previous_total,
+            AVG(CASE WHEN timestamp >= :current_start AND timestamp <= :current_end THEN meter_reading END) AS current_average,
+            AVG(CASE WHEN timestamp >= :previous_start AND timestamp < :previous_end THEN meter_reading END) AS previous_average,
+            MAX(CASE WHEN timestamp >= :current_start AND timestamp <= :current_end THEN meter_reading END) AS current_peak
         FROM meter_readings
         WHERE building_id = :building_id
           AND meter = :meter
@@ -181,21 +185,27 @@ def get_meter_window_statistics(building_id: str, meter: str, window_days: int =
         """,
         {"building_id": building_id, "meter": meter},
     )  # 执行最新读数查询。
+    current_count = int(stats_row.get("current_count") or 0)  # 读取当前窗口真实命中的读数条数。
+    previous_count = int(stats_row.get("previous_count") or 0)  # 读取上一窗口真实命中的读数条数。
     return {  # 返回统一的窗口统计结果字典。
         "window_end": window_end,  # 写入窗口结束时间。
         "current_start": current_start,  # 写入当前窗口开始时间。
         "previous_start": previous_start,  # 写入上一窗口开始时间。
-        "current_total": round(float(stats_row.get("current_total") or 0), 4),  # 写入当前窗口总量。
-        "previous_total": round(float(stats_row.get("previous_total") or 0), 4),  # 写入上一窗口总量。
-        "current_average": round(float(stats_row.get("current_average") or 0), 4),  # 写入当前窗口均值。
-        "previous_average": round(float(stats_row.get("previous_average") or 0), 4),  # 写入上一窗口均值。
-        "current_peak": round(float(stats_row.get("current_peak") or 0), 4),  # 写入当前窗口峰值。
-        "latest_value": round(float((latest_row or {}).get("meter_reading") or 0), 4),  # 写入最新一条读数。
+        "current_total": round_optional_float(stats_row.get("current_total")),  # 写入当前窗口总量；如果缺失则明确返回空值。
+        "previous_total": round_optional_float(stats_row.get("previous_total")),  # 写入上一窗口总量；如果缺失则明确返回空值。
+        "current_average": round_optional_float(stats_row.get("current_average")),  # 写入当前窗口均值；如果缺失则明确返回空值。
+        "previous_average": round_optional_float(stats_row.get("previous_average")),  # 写入上一窗口均值；如果缺失则明确返回空值。
+        "current_peak": round_optional_float(stats_row.get("current_peak")),  # 写入当前窗口峰值；如果缺失则明确返回空值。
+        "latest_value": round_optional_float((latest_row or {}).get("meter_reading")),  # 写入最新一条读数；如果缺失则明确返回空值。
         "latest_timestamp": (latest_row or {}).get("timestamp"),  # 写入最新一条读数时间。
+        "current_count": current_count,  # 写入当前窗口真实命中的读数条数。
+        "previous_count": previous_count,  # 写入上一窗口真实命中的读数条数。
     }  # 完成统计字典构造。
 
 
-def calculate_change_rate(current_value: float, previous_value: float) -> float | None:  # 定义计算变化率的函数。
+def calculate_change_rate(current_value: float | None, previous_value: float | None) -> float | None:  # 定义计算变化率的函数。
+    if current_value is None or previous_value is None:  # 如果当前值或上一值缺失，
+        return None  # 就直接返回空，避免把缺失值误算成变化率。
     if previous_value == 0:  # 如果上一周期值为 0，
         return None  # 就不返回变化率，避免误导或除零。
     return round((current_value - previous_value) / previous_value, 4)  # 返回保留四位小数的变化率。
@@ -230,6 +240,8 @@ def build_building_summary_metrics(building_id: str, building_row: dict[str, Any
                 value=meter_stats["current_total"],  # 写入当前窗口总量。
                 unit=get_meter_unit(focus_meter),  # 写入当前表计对应的单位。
                 change_rate=calculate_change_rate(meter_stats["current_total"], meter_stats["previous_total"]),  # 写入相对上一窗口的变化率。
+                data_status=resolve_numeric_data_status(has_data=meter_stats["current_count"] > 0),  # 写入当前卡片数据状态，避免把缺失值误认为 0。
+                data_note=None if meter_stats["current_count"] > 0 else f"近{DEFAULT_WINDOW_DAYS}天窗口内没有命中的 {focus_meter} 读数。",  # 在缺失时补充明确说明。
             )  # 完成最近窗口总量卡片对象创建。
         )  # 完成最近窗口总量卡片追加。
     return cards  # 返回完整指标卡片列表。
