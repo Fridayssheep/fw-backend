@@ -1,7 +1,13 @@
+from datetime import date  # 导入日期类型，方便做日聚合窗口和缓存键计算。
 from datetime import datetime  # 导入日期时间类型，方便做 dashboard 时间计算。
 from datetime import timedelta  # 导入时间差类型，方便构造上一统计周期。
+import os  # 导入环境变量读取函数，方便配置缓存 TTL。
+from threading import Lock  # 导入线程锁，避免并发请求重复刷新聚合窗口。
 from typing import Any  # 导入任意类型注解，方便描述松散的中间数据结构。
 
+from sqlalchemy import text  # 导入 SQL 文本函数，方便执行多语句事务。
+from app.core.database import build_in_clause  # 导入 IN 子句构造函数，方便动态拼接 meter/building 过滤。
+from app.core.database import engine  # 导入数据库引擎，方便在同一事务内先删后写聚合窗口。
 from app.core.database import fetch_all  # 导入多行查询函数，方便查询建筑范围和聚合结果。
 from app.core.database import fetch_one  # 导入单行查询函数，方便做建筑存在性检查。
 from app.schemas.schemas_common import MetricCard  # 导入通用指标卡片模型，方便复用现有前端结构。
@@ -37,6 +43,12 @@ DASHBOARD_LIGHTING_ESTIMATE_RATIO = 0.22  # 定义照明能耗估算比例（无
 DASHBOARD_RECENT_DAYS = 7  # 定义顶部卡片默认回看天数。
 DASHBOARD_COP_GOOD_THRESHOLD = COP_PROXY_GOOD_THRESHOLD  # 定义 dashboard 复用 energy 的代理 COP 良好阈值。
 DASHBOARD_COP_WARNING_THRESHOLD = COP_PROXY_WARNING_THRESHOLD  # 定义 dashboard 复用 energy 的代理 COP 预警阈值。
+METER_DAILY_AGG_REFRESH_TTL_SECONDS = int(os.getenv("METER_DAILY_AGG_REFRESH_TTL_SECONDS", "86400"))  # 定义日聚合窗口刷新的 TTL（默认 24 小时）。
+DASHBOARD_MONTH_CACHE_TTL_SECONDS = int(os.getenv("DASHBOARD_MONTH_CACHE_TTL_SECONDS", "180"))  # 定义 dashboard 月视图缓存 TTL（默认 3 分钟）。
+_DAILY_AGG_WINDOW_CACHE: list[dict[str, Any]] = []  # 缓存已刷新聚合窗口，避免同时间窗重复回刷明细表。
+_DAILY_AGG_WINDOW_LOCK = Lock()  # 保护聚合窗口缓存的并发访问。
+_DASHBOARD_MONTH_CACHE: dict[tuple[str, str, str, str], dict[str, Any]] = {}  # 缓存月视图折线图结果，降低热点请求抖动。
+_DASHBOARD_MONTH_CACHE_LOCK = Lock()  # 保护月视图缓存的并发访问。
 
 
 def build_dashboard_scope_filters(  # 定义构造 dashboard 范围过滤条件的函数。
@@ -53,6 +65,204 @@ def build_dashboard_scope_filters(  # 定义构造 dashboard 范围过滤条件�
         clauses.append(f"{metadata_alias}.building_id = :dashboard_building_id")  # 就追加建筑过滤条件。
         params["dashboard_building_id"] = building_id  # 把建筑参数写入参数字典。
     return " AND ".join(clauses), params  # 返回完整过滤条件和参数字典。
+
+
+def normalize_meter_list(meters: list[str]) -> list[str]:  # 定义标准化 meter 列表的函数。
+    normalized = sorted({str(item).strip().lower() for item in meters if str(item).strip()})  # 去重并统一小写，避免 SQL 参数重复。
+    if not normalized:  # 如果标准化后没有可用 meter，
+        raise ValueError("meter 列表不能为空")  # 就抛出明确异常，避免执行无意义 SQL。
+    return normalized  # 返回稳定排序后的 meter 列表。
+
+
+def build_dashboard_fact_scope(  # 定义构造事实表过滤条件的函数。
+    site_id: str | None,  # 接收站点编号参数。
+    building_id: str | None,  # 接收建筑编号参数。
+    fact_alias: str,  # 接收事实表别名（如 mr/da）。
+    metadata_alias: str = "bm",  # 接收元数据表别名。
+) -> tuple[str, str, dict[str, Any]]:  # 返回 join 语句、where 条件和参数字典。
+    clauses: list[str] = ["1=1"]  # 初始化 where 子句列表。
+    params: dict[str, Any] = {}  # 初始化 SQL 参数字典。
+    join_sql = ""  # 默认不做 metadata join，避免全局查询引入额外开销。
+    if site_id:  # 只有筛 site 时才需要 join 元数据表。
+        join_sql = f"JOIN building_metadata {metadata_alias} ON {fact_alias}.building_id = {metadata_alias}.building_id"  # 构造按站点筛选所需的 join。
+        clauses.append(f"{metadata_alias}.site_id = :dashboard_site_id")  # 追加站点过滤条件。
+        params["dashboard_site_id"] = site_id  # 写入站点参数。
+    if building_id:  # 如果传了 building_id，
+        clauses.append(f"{fact_alias}.building_id = :dashboard_building_id")  # 直接用事实表字段过滤，避免无谓 join。
+        params["dashboard_building_id"] = building_id  # 写入建筑参数。
+    return join_sql, " AND ".join(clauses), params  # 返回 join/where/params 三元组。
+
+
+def _prune_daily_agg_window_cache(now: datetime) -> None:  # 定义清理过期聚合窗口缓存的函数。
+    _DAILY_AGG_WINDOW_CACHE[:] = [item for item in _DAILY_AGG_WINDOW_CACHE if item["expires_at"] > now]  # 仅保留仍在 TTL 内的窗口记录。
+
+
+def _is_daily_agg_window_fresh(  # 定义判断聚合窗口是否已被覆盖的函数。
+    start_day: date,  # 接收窗口开始日期。
+    end_day: date,  # 接收窗口结束日期。
+    meter_set: set[str],  # 接收窗口涉及的 meter 集合。
+    now: datetime,  # 接收当前时间。
+) -> bool:  # 返回当前窗口是否已在缓存内。
+    for item in _DAILY_AGG_WINDOW_CACHE:  # 遍历所有已缓存窗口。
+        if item["expires_at"] <= now:  # 如果窗口已经过期，
+            continue  # 就跳过当前记录。
+        if item["start_day"] <= start_day and item["end_day"] >= end_day and set(item["meters"]).issuperset(meter_set):  # 如果缓存窗口完整覆盖了目标范围且 meter 是超集，
+            return True  # 就表示无需重新刷新聚合窗口。
+    return False  # 如果没有命中覆盖窗口，就返回 false。
+
+
+def _register_daily_agg_window_cache(  # 定义登记已刷新聚合窗口缓存的函数。
+    start_day: date,  # 接收窗口开始日期。
+    end_day: date,  # 接收窗口结束日期。
+    meters: list[str],  # 接收窗口涉及的 meter 列表。
+) -> None:  # 无返回值。
+    now = datetime.now()  # 记录当前时间，方便计算 TTL 过期时间。
+    with _DAILY_AGG_WINDOW_LOCK:  # 加锁保护共享缓存。
+        _prune_daily_agg_window_cache(now)  # 写入前先清理过期窗口，控制缓存体积。
+        _DAILY_AGG_WINDOW_CACHE.append(  # 追加当前窗口记录。
+            {
+                "start_day": start_day,
+                "end_day": end_day,
+                "meters": tuple(meters),
+                "expires_at": now + timedelta(seconds=METER_DAILY_AGG_REFRESH_TTL_SECONDS),
+            }
+        )
+
+
+def ensure_meter_daily_agg_window(  # 定义按窗口刷新日聚合表的函数。
+    start_time: datetime,  # 接收窗口开始时间（包含）。
+    end_time: datetime,  # 接收窗口结束时间（包含）。
+    meters: list[str],  # 接收需要刷新的 meter 列表。
+) -> None:  # 无返回值。
+    if end_time < start_time:  # 如果时间窗口非法，
+        return  # 直接返回，避免执行多余 SQL。
+    normalized_meters = normalize_meter_list(meters)  # 标准化 meter 列表。
+    start_day = start_time.date()  # 取窗口开始日期。
+    end_day = end_time.date()  # 取窗口结束日期。
+    meter_set = set(normalized_meters)  # 构造 meter 集合，方便做覆盖判断。
+    now = datetime.now()  # 记录当前时间，方便做 TTL 判断。
+    with _DAILY_AGG_WINDOW_LOCK:  # 读取缓存时加锁，避免并发下重复刷新。
+        _prune_daily_agg_window_cache(now)  # 读取前先清理过期窗口。
+        if _is_daily_agg_window_fresh(start_day, end_day, meter_set, now):  # 如果当前窗口已在 TTL 内覆盖，
+            return  # 就直接复用，跳过刷新 SQL。
+    delete_meter_clause, delete_meter_params = build_in_clause("meter", normalized_meters, "agg_delete_meter")  # 构造 delete 阶段 meter 过滤子句。
+    select_meter_clause, select_meter_params = build_in_clause("mr.meter", normalized_meters, "agg_select_meter")  # 构造 insert 阶段 meter 过滤子句。
+    existing_state = fetch_one(  # 先检查数据库里该窗口的聚合结果是否已经是新鲜数据。
+        f"""
+        SELECT
+            COUNT(*) AS row_count,
+            MIN(refreshed_at) AS min_refreshed_at
+        FROM meter_daily_agg
+        WHERE bucket_day >= :agg_start_day
+          AND bucket_day <= :agg_end_day
+          AND {delete_meter_clause}
+        """,
+        {
+            "agg_start_day": start_day,
+            "agg_end_day": end_day,
+            **delete_meter_params,
+        },
+    ) or {}  # 如果查不到结果就回退空字典。
+    row_count = int(existing_state.get("row_count") or 0)  # 读取窗口聚合行数。
+    min_refreshed_at = existing_state.get("min_refreshed_at")  # 读取窗口最早刷新时间，作为数据新鲜度判定依据。
+    if isinstance(min_refreshed_at, str):  # 兼容少量驱动返回字符串时间的情况。
+        try:  # 尝试把字符串转成 datetime。
+            min_refreshed_at = datetime.fromisoformat(min_refreshed_at)  # 解析 ISO 时间。
+        except ValueError:  # 如果解析失败，
+            min_refreshed_at = None  # 就回退为空，进入重算分支。
+    if row_count > 0 and isinstance(min_refreshed_at, datetime) and (now - min_refreshed_at).total_seconds() <= METER_DAILY_AGG_REFRESH_TTL_SECONDS:  # 如果数据库内窗口数据仍在 TTL 内，
+        _register_daily_agg_window_cache(start_day, end_day, normalized_meters)  # 就登记进进程缓存，避免重复查库。
+        return  # 并直接返回，跳过重算。
+    with engine.begin() as connection:  # 同一事务中完成先删后写，避免读到中间态。
+        connection.execute(  # 删除目标窗口内旧聚合结果，保证重算后数据绝对一致。
+            text(
+                f"""
+                DELETE FROM meter_daily_agg
+                WHERE bucket_day >= :agg_start_day
+                  AND bucket_day <= :agg_end_day
+                  AND {delete_meter_clause}
+                """
+            ),
+            {
+                "agg_start_day": start_day,
+                "agg_end_day": end_day,
+                **delete_meter_params,
+            },
+        )
+        connection.execute(  # 按天重算并写入窗口聚合结果。
+            text(
+                f"""
+                INSERT INTO meter_daily_agg (
+                    bucket_day,
+                    building_id,
+                    meter,
+                    reading_sum,
+                    reading_count,
+                    latest_timestamp,
+                    refreshed_at
+                )
+                SELECT
+                    date_trunc('day', mr.timestamp)::date AS bucket_day,
+                    mr.building_id AS building_id,
+                    mr.meter AS meter,
+                    COALESCE(SUM(mr.meter_reading), 0) AS reading_sum,
+                    COUNT(mr.meter_reading) AS reading_count,
+                    MAX(mr.timestamp) AS latest_timestamp,
+                    NOW() AS refreshed_at
+                FROM meter_readings mr
+                WHERE mr.timestamp >= :agg_start_ts
+                  AND mr.timestamp < :agg_end_exclusive
+                  AND {select_meter_clause}
+                GROUP BY 1, 2, 3
+                """
+            ),
+            {
+                "agg_start_ts": datetime.combine(start_day, datetime.min.time()),
+                "agg_end_exclusive": datetime.combine(end_day + timedelta(days=1), datetime.min.time()),
+                **select_meter_params,
+            },
+        )
+    _register_daily_agg_window_cache(start_day, end_day, normalized_meters)  # 刷新成功后登记缓存窗口。
+
+
+def build_dashboard_month_cache_key(  # 定义构造 dashboard 月视图缓存键的函数。
+    current_end: datetime,  # 接收当前窗口结束时间。
+    site_id: str | None,  # 接收站点编号参数。
+    building_id: str | None,  # 接收建筑编号参数。
+) -> tuple[str, str, str, str]:  # 返回月视图缓存键。
+    end_time_bucket = current_end.replace(minute=0, second=0, microsecond=0).isoformat(timespec="seconds")  # 以小时桶作为 end_time_bucket，平衡命中率和一致性。
+    return (
+        DashboardChartRange.month.value,
+        site_id or "__all_sites__",
+        building_id or "__all_buildings__",
+        end_time_bucket,
+    )  # 返回 (chart_range, site_id, building_id, end_time_bucket) 结构的缓存键。
+
+
+def get_cached_dashboard_month_trend_chart(  # 定义读取 dashboard 月视图缓存的函数。
+    cache_key: tuple[str, str, str, str],  # 接收缓存键。
+) -> DashboardTrendChart | None:  # 返回命中的折线图缓存；未命中返回空。
+    now = datetime.now()  # 记录当前时间用于 TTL 判断。
+    with _DASHBOARD_MONTH_CACHE_LOCK:  # 读取缓存时加锁，避免并发读写冲突。
+        cached_item = _DASHBOARD_MONTH_CACHE.get(cache_key)  # 尝试读取缓存记录。
+        if cached_item is None:  # 如果不存在缓存，
+            return None  # 就返回空。
+        if cached_item["expires_at"] <= now:  # 如果缓存已过期，
+            _DASHBOARD_MONTH_CACHE.pop(cache_key, None)  # 删除过期缓存，避免字典膨胀。
+            return None  # 并返回空。
+        cached_chart = cached_item["chart"]  # 取出缓存中的图表对象。
+        return cached_chart.model_copy(deep=True)  # 返回深拷贝，避免外部修改污染缓存。
+
+
+def set_cached_dashboard_month_trend_chart(  # 定义写入 dashboard 月视图缓存的函数。
+    cache_key: tuple[str, str, str, str],  # 接收缓存键。
+    chart: DashboardTrendChart,  # 接收需要缓存的折线图对象。
+) -> None:  # 无返回值。
+    with _DASHBOARD_MONTH_CACHE_LOCK:  # 写缓存时加锁。
+        _DASHBOARD_MONTH_CACHE[cache_key] = {  # 覆盖写入缓存项。
+            "expires_at": datetime.now() + timedelta(seconds=DASHBOARD_MONTH_CACHE_TTL_SECONDS),
+            "chart": chart.model_copy(deep=True),
+        }
 
 
 def normalize_dashboard_window(  # 定义标准化 dashboard 时间窗口的函数。
@@ -113,6 +323,8 @@ def get_dashboard_period_rows(  # 定义查询 dashboard 双周期聚合结果�
     site_id: str | None,  # 接收站点编号参数。
     building_id: str | None,  # 接收建筑编号参数。
 ) -> list[dict[str, Any]]:  # 返回按建筑聚合后的双周期结果列表。
+    ensure_meter_daily_agg_window(previous_start, current_end, [DEFAULT_DASHBOARD_METER])  # 先确保双周期窗口内的 electricity 日聚合可用。
+    previous_end_effective = previous_end - timedelta(microseconds=1)  # 把上一周期开区间尾部转成闭区间末端日期，方便落到 DATE 维度。
     where_sql, params = build_dashboard_scope_filters(site_id, building_id)  # 先构造 dashboard 范围过滤条件。
     rows = fetch_all(  # 查询每栋楼在当前周期和上一周期的聚合电耗。
         f"""
@@ -121,17 +333,17 @@ def get_dashboard_period_rows(  # 定义查询 dashboard 双周期聚合结果�
             bm.site_id AS site_id,
             bm.primaryspaceusage AS primaryspaceusage,
             bm.sqm AS sqm,
-            COUNT(CASE WHEN mr.timestamp >= :current_start AND mr.timestamp <= :current_end THEN mr.meter_reading END) AS current_count,
-            COUNT(CASE WHEN mr.timestamp >= :previous_start AND mr.timestamp < :previous_end THEN mr.meter_reading END) AS previous_count,
-            COALESCE(SUM(CASE WHEN mr.timestamp >= :current_start AND mr.timestamp <= :current_end THEN mr.meter_reading END), 0) AS current_total,
-            COALESCE(SUM(CASE WHEN mr.timestamp >= :previous_start AND mr.timestamp < :previous_end THEN mr.meter_reading END), 0) AS previous_total,
-            MAX(CASE WHEN mr.timestamp >= :current_start AND mr.timestamp <= :current_end THEN mr.timestamp END) AS latest_timestamp
+            COALESCE(SUM(CASE WHEN da.bucket_day >= :current_start_day AND da.bucket_day <= :current_end_day THEN da.reading_count ELSE 0 END), 0) AS current_count,
+            COALESCE(SUM(CASE WHEN da.bucket_day >= :previous_start_day AND da.bucket_day <= :previous_end_day THEN da.reading_count ELSE 0 END), 0) AS previous_count,
+            COALESCE(SUM(CASE WHEN da.bucket_day >= :current_start_day AND da.bucket_day <= :current_end_day THEN da.reading_sum ELSE 0 END), 0) AS current_total,
+            COALESCE(SUM(CASE WHEN da.bucket_day >= :previous_start_day AND da.bucket_day <= :previous_end_day THEN da.reading_sum ELSE 0 END), 0) AS previous_total,
+            NULL::timestamp AS latest_timestamp
         FROM building_metadata bm
-        LEFT JOIN meter_readings mr
-            ON bm.building_id = mr.building_id
-           AND mr.meter = :dashboard_meter
-           AND mr.timestamp >= :previous_start
-           AND mr.timestamp <= :current_end
+        LEFT JOIN meter_daily_agg da
+            ON bm.building_id = da.building_id
+           AND da.meter = :dashboard_meter
+           AND da.bucket_day >= :previous_start_day
+           AND da.bucket_day <= :current_end_day
         WHERE {where_sql}
         GROUP BY bm.building_id, bm.site_id, bm.primaryspaceusage, bm.sqm
         ORDER BY bm.building_id ASC
@@ -139,10 +351,10 @@ def get_dashboard_period_rows(  # 定义查询 dashboard 双周期聚合结果�
         {
             **params,
             "dashboard_meter": DEFAULT_DASHBOARD_METER,
-            "current_start": current_start,
-            "current_end": current_end,
-            "previous_start": previous_start,
-            "previous_end": previous_end,
+            "current_start_day": current_start.date(),
+            "current_end_day": current_end.date(),
+            "previous_start_day": previous_start.date(),
+            "previous_end_day": previous_end_effective.date(),
         },
     )  # 执行双周期聚合查询。
     return rows  # 返回按建筑聚合后的结果列表。
@@ -218,24 +430,53 @@ def get_dashboard_trend_rows(  # 定义查询 dashboard 趋势图原始数据的
     building_id: str | None,  # 接收建筑编号参数。
     bucket_granularity: str,  # 接收 SQL 时间粒度。
 ) -> list[dict[str, Any]]:  # 返回趋势原始聚合行列表。
-    where_sql, params = build_dashboard_scope_filters(site_id, building_id)  # 先复用 dashboard 范围过滤条件。
-    return fetch_all(  # 执行趋势图聚合查询并返回结果。
+    trend_meters = ["electricity", "chilledwater", "lighting"]  # 定义趋势图固定使用的三类 meter。
+    if bucket_granularity == "day":  # 周/月视图按天查询时，优先读取日聚合表。
+        ensure_meter_daily_agg_window(query_start, query_end - timedelta(microseconds=1), trend_meters)  # 先保证趋势窗口对应的日聚合数据可用。
+        join_sql, where_sql, params = build_dashboard_fact_scope(site_id, building_id, "da")  # 构造日聚合查询的动态范围过滤条件。
+        meter_clause, meter_params = build_in_clause("da.meter", trend_meters, "trend_meter")  # 构造 meter IN 条件。
+        return fetch_all(  # 执行日聚合趋势查询并返回结果。
+            f"""
+            SELECT
+                da.bucket_day::timestamp AS bucket_time,
+                da.meter AS meter,
+                COALESCE(SUM(da.reading_sum), 0) AS value
+            FROM meter_daily_agg da
+            {join_sql}
+            WHERE {where_sql}
+              AND da.bucket_day >= :trend_start_day
+              AND da.bucket_day < :trend_end_day
+              AND {meter_clause}
+            GROUP BY 1, 2
+            ORDER BY 1 ASC, 2 ASC
+            """,
+            {
+                **params,
+                **meter_params,
+                "trend_start_day": query_start.date(),
+                "trend_end_day": query_end.date(),
+            },
+        )  # 返回按天聚合后的趋势行。
+    join_sql, where_sql, params = build_dashboard_fact_scope(site_id, building_id, "mr")  # 日内视图继续走明细查询，并按条件动态控制 join。
+    meter_clause, meter_params = build_in_clause("mr.meter", trend_meters, "trend_meter")  # 构造 meter IN 条件。
+    return fetch_all(  # 执行小时粒度趋势聚合查询并返回结果。
         f"""
         SELECT
             date_trunc('{bucket_granularity}', mr.timestamp) AS bucket_time,
             mr.meter AS meter,
             COALESCE(SUM(mr.meter_reading), 0) AS value
         FROM meter_readings mr
-        LEFT JOIN building_metadata bm ON mr.building_id = bm.building_id
+        {join_sql}
         WHERE {where_sql}
           AND mr.timestamp >= :trend_start
           AND mr.timestamp < :trend_end
-          AND mr.meter IN ('electricity', 'chilledwater', 'lighting')
+          AND {meter_clause}
         GROUP BY 1, 2
         ORDER BY 1 ASC, 2 ASC
         """,
         {
             **params,
+            **meter_params,
             "trend_start": query_start,
             "trend_end": query_end,
         },
@@ -248,6 +489,12 @@ def build_dashboard_trend_chart(  # 定义构造 dashboard 折线图对象的函
     building_id: str | None,  # 接收建筑编号参数。
     chart_range: DashboardChartRange,  # 接收图表范围枚举。
 ) -> DashboardTrendChart:  # 返回 dashboard 折线图模型。
+    month_cache_key: tuple[str, str, str, str] | None = None  # 初始化月视图缓存键。
+    if chart_range == DashboardChartRange.month:  # 月视图先尝试命中短 TTL 缓存，降低热点重复计算。
+        month_cache_key = build_dashboard_month_cache_key(current_end, site_id, building_id)  # 构造缓存键。
+        cached_chart = get_cached_dashboard_month_trend_chart(month_cache_key)  # 读取缓存结果。
+        if cached_chart is not None:  # 如果命中缓存，
+            return cached_chart  # 就直接返回缓存结果。
     point_times, labels, query_start, query_end, bucket_granularity = build_dashboard_trend_context(current_end, chart_range)  # 先构造折线图上下文。
     trend_rows = get_dashboard_trend_rows(query_start, query_end, site_id, building_id, bucket_granularity)  # 查询折线图原始聚合数据。
     index_map = {point_time: index for index, point_time in enumerate(point_times)}  # 构造时间到索引的映射，方便 O(1) 回填序列值。
@@ -282,7 +529,10 @@ def build_dashboard_trend_chart(  # 定义构造 dashboard 折线图对象的函
         DashboardTrendSeries(key="cooling_energy", name="制冷能耗", unit="kWh", chart_type="line", values=series_value_map["chilledwater"], data_statuses=series_status_map["chilledwater"]),  # 构造制冷能耗折线序列。
         DashboardTrendSeries(key="lighting_energy", name="照明能耗", unit="kWh", chart_type="line", values=lighting_values, data_statuses=lighting_statuses),  # 构造照明能耗折线序列。
     ]  # 完成折线图序列构造。
-    return DashboardTrendChart(range=chart_range, labels=labels, series=trend_series)  # 返回完整折线图对象。
+    chart = DashboardTrendChart(range=chart_range, labels=labels, series=trend_series)  # 构造最终折线图对象。
+    if month_cache_key is not None:  # 如果当前是月视图，
+        set_cached_dashboard_month_trend_chart(month_cache_key, chart)  # 就把结果写入短 TTL 缓存。
+    return chart  # 返回完整折线图对象。
 
 
 def build_dashboard_recent_daily_context(  # 定义构造 dashboard 顶部卡片近 N 天上下文的函数。
@@ -302,26 +552,29 @@ def get_dashboard_recent_energy_rows(  # 定义查询 dashboard 顶部卡片近 
     site_id: str | None,  # 接收站点编号参数。
     building_id: str | None,  # 接收建筑编号参数。
 ) -> list[dict[str, Any]]:  # 返回按天聚合的能耗行列表。
-    where_sql, params = build_dashboard_scope_filters(site_id, building_id)  # 先复用 dashboard 范围过滤条件。
+    ensure_meter_daily_agg_window(query_start, query_end - timedelta(microseconds=1), ["electricity", "chilledwater"])  # 先确保近 N 天窗口的日聚合结果可用。
+    join_sql, where_sql, params = build_dashboard_fact_scope(site_id, building_id, "da")  # 构造按范围过滤的动态 join/where 片段。
+    meter_clause, meter_params = build_in_clause("da.meter", ["electricity", "chilledwater"], "recent_meter")  # 构造 meter IN 条件。
     return fetch_all(  # 执行近 N 天电耗和制冷能耗聚合查询。
         f"""
         SELECT
-            date_trunc('day', mr.timestamp) AS bucket_day,
-            mr.meter AS meter,
-            COALESCE(SUM(mr.meter_reading), 0) AS value
-        FROM meter_readings mr
-        LEFT JOIN building_metadata bm ON mr.building_id = bm.building_id
+            da.bucket_day::timestamp AS bucket_day,
+            da.meter AS meter,
+            COALESCE(SUM(da.reading_sum), 0) AS value
+        FROM meter_daily_agg da
+        {join_sql}
         WHERE {where_sql}
-          AND mr.timestamp >= :recent_start
-          AND mr.timestamp < :recent_end
-          AND mr.meter IN ('electricity', 'chilledwater')
+          AND da.bucket_day >= :recent_start_day
+          AND da.bucket_day < :recent_end_day
+          AND {meter_clause}
         GROUP BY 1, 2
         ORDER BY 1 ASC, 2 ASC
         """,
         {
             **params,
-            "recent_start": query_start,
-            "recent_end": query_end,
+            **meter_params,
+            "recent_start_day": query_start.date(),
+            "recent_end_day": query_end.date(),
         },
     )  # 返回近 N 天能耗行列表。
 
@@ -619,6 +872,61 @@ def build_building_diagnostics(  # 定义构造楼栋级诊断结果的函数。
     return diagnostics  # 返回完整楼栋诊断结果列表。
 
 
+def get_dashboard_latest_timestamps_for_buildings(  # 定义按建筑批量查询当前周期最新采样时间的函数。
+    current_start: datetime,  # 接收当前周期开始时间。
+    current_end: datetime,  # 接收当前周期结束时间。
+    building_ids: list[str],  # 接收需要查询的建筑编号列表。
+) -> dict[str, datetime]:  # 返回建筑编号到最新时间的映射。
+    safe_building_ids = sorted({str(item).strip() for item in building_ids if str(item).strip()})  # 标准化建筑编号列表，避免重复查询。
+    if not safe_building_ids:  # 如果没有可查询建筑编号，
+        return {}  # 就返回空映射。
+    building_clause, building_params = build_in_clause("mr.building_id", safe_building_ids, "latest_building")  # 构造建筑 IN 条件。
+    rows = fetch_all(  # 查询建筑范围内当前周期最新时间。
+        f"""
+        SELECT
+            mr.building_id AS building_id,
+            MAX(mr.timestamp) AS latest_timestamp
+        FROM meter_readings mr
+        WHERE mr.meter = :dashboard_meter
+          AND mr.timestamp >= :current_start
+          AND mr.timestamp <= :current_end
+          AND {building_clause}
+        GROUP BY mr.building_id
+        """,
+        {
+            "dashboard_meter": DEFAULT_DASHBOARD_METER,
+            "current_start": current_start,
+            "current_end": current_end,
+            **building_params,
+        },
+    )  # 执行按建筑最新时间查询。
+    return {str(row["building_id"]): row.get("latest_timestamp") for row in rows if row.get("building_id")}  # 返回建筑编号到最新时间的映射。
+
+
+def attach_latest_timestamps_for_top_anomalies(  # 定义给高能耗候选建筑补最新时间的函数。
+    diagnostics: list[dict[str, Any]],  # 接收楼栋诊断结果列表。
+    current_start: datetime,  # 接收当前周期开始时间。
+    current_end: datetime,  # 接收当前周期结束时间。
+    limit: int = DASHBOARD_ANOMALY_LIMIT,  # 接收需要补时间的高能耗建筑数量上限。
+) -> None:  # 原地修改 diagnostics，无返回值。
+    target_buildings: list[str] = []  # 初始化待查询最新时间的建筑列表。
+    for item in diagnostics:  # 遍历已排序诊断结果。
+        if not item.get("is_high_energy"):  # 只给高能耗候选建筑补最新时间。
+            continue  # 非高能耗对象直接跳过。
+        target_buildings.append(str(item.get("building_id") or ""))  # 记录当前目标建筑编号。
+        if len(target_buildings) >= limit:  # 到达上限后提前结束，避免无效查询。
+            break
+    if not target_buildings:  # 如果没有需要补充的建筑，
+        return  # 直接返回。
+    latest_map = get_dashboard_latest_timestamps_for_buildings(current_start, current_end, target_buildings)  # 查询目标建筑的最新时间映射。
+    if not latest_map:  # 如果查询结果为空，
+        return  # 就直接返回。
+    for item in diagnostics:  # 遍历诊断结果并回填最新时间。
+        building_key = str(item.get("building_id") or "")  # 读取建筑键。
+        if building_key in latest_map:  # 如果该建筑命中了最新时间结果，
+            item["latest_timestamp"] = latest_map[building_key]  # 就把最新时间回填到诊断结果中。
+
+
 def build_dashboard_metrics(  # 定义构造 dashboard 指标卡片列表的函数。
     scope_rows: list[dict[str, Any]],  # 接收 dashboard 范围内建筑清单。
     diagnostics: list[dict[str, Any]],  # 接收楼栋诊断结果列表。
@@ -697,7 +1005,19 @@ def build_dashboard_snapshot(  # 定义构造 dashboard 快照的函数。
     resolved_start, resolved_end = resolve_time_range(start_time, end_time, [building_id] if building_id else None, site_id, DEFAULT_DASHBOARD_METER)  # 按电耗口径补齐当前 dashboard 时间范围。
     current_start, current_end, previous_start, previous_end = normalize_dashboard_window(resolved_start, resolved_end)  # 构造当前周期和上一周期时间范围。
     normalized_chart_range = normalize_dashboard_chart_range(chart_range)  # 标准化图表范围参数。
-    diagnostics = build_building_diagnostics(get_dashboard_period_rows(current_start, current_end, previous_start, previous_end, site_id, building_id))  # 查询并构造楼栋诊断结果。
+    _, _, recent_start, recent_end = build_dashboard_recent_daily_context(current_end, DASHBOARD_RECENT_DAYS)  # 先取顶部 KPI 近 N 天窗口，供聚合预热复用。
+    _, _, trend_start, trend_end, trend_bucket_granularity = build_dashboard_trend_context(current_end, normalized_chart_range)  # 取折线图窗口与粒度，供聚合预热复用。
+    agg_meters = {"electricity", "chilledwater"}  # 初始化需要预热的 meter 集合。
+    agg_start_candidates = [previous_start, recent_start]  # 初始化聚合预热开始时间候选列表。
+    agg_end_candidates = [current_end, recent_end - timedelta(microseconds=1)]  # 初始化聚合预热结束时间候选列表。
+    if trend_bucket_granularity == "day":  # 只有周/月视图会走日聚合。
+        agg_meters.add("lighting")  # 趋势图需要照明能耗序列。
+        agg_start_candidates.append(trend_start)  # 把趋势窗口起点加入预热范围。
+        agg_end_candidates.append(trend_end - timedelta(microseconds=1))  # 把趋势窗口终点（闭区间）加入预热范围。
+    ensure_meter_daily_agg_window(min(agg_start_candidates), max(agg_end_candidates), sorted(agg_meters))  # 一次性预热 dashboard 本次请求所需的日聚合窗口。
+    period_rows = get_dashboard_period_rows(current_start, current_end, previous_start, previous_end, site_id, building_id)  # 查询双周期聚合结果。
+    diagnostics = build_building_diagnostics(period_rows)  # 基于双周期结果构造楼栋诊断列表。
+    attach_latest_timestamps_for_top_anomalies(diagnostics, current_start, current_end)  # 仅给高能耗候选建筑补最新时间，避免全量 MAX(timestamp)。
     anomalies = build_dashboard_anomalies(diagnostics)  # 基于诊断结果构造异常摘要列表。
     metrics = build_dashboard_metrics(scope_rows, diagnostics)  # 基于范围和诊断结果构造指标卡片列表。
     metrics_by_key = {metric.key: metric for metric in metrics}  # 把指标卡片整理成按 key 查询的映射。

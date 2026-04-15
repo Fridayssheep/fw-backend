@@ -17,3 +17,11 @@ ON building_metadata (building_id);
 -- 天气数据联合索引 (通过园区+时间联合查询)
 CREATE INDEX IF NOT EXISTS idx_weather_site_time 
 ON weather_data (site_id, timestamp);
+
+-- 日聚合表索引：趋势/对比常用 meter + 天 + 建筑过滤
+CREATE INDEX IF NOT EXISTS idx_meter_daily_agg_meter_day_building
+ON meter_daily_agg (meter, bucket_day, building_id);
+
+-- 日聚合表索引：楼栋回查常用 building + meter + 天
+CREATE INDEX IF NOT EXISTS idx_meter_daily_agg_building_meter_day
+ON meter_daily_agg (building_id, meter, bucket_day);
