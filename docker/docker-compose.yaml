@@ -12,11 +12,12 @@ services:
     volumes:
       - ./pgdata:/var/lib/postgresql/data
       - ../app/core/sql/base_tables.sql:/docker-entrypoint-initdb.d/01-base_tables.sql:ro
-      - ../app/core/sql/anomaly_events.sql:/docker-entrypoint-initdb.d/02-anomaly_events.sql:ro
-      - ../app/core/sql/ai_anomaly_feedback.sql:/docker-entrypoint-initdb.d/03-ai_anomaly_feedback.sql:ro
-      - ../app/core/sql/ai_qa_sessions.sql:/docker-entrypoint-initdb.d/04-ai_qa_sessions.sql:ro
-      - ../app/core/sql/create_indexes.sql:/docker-entrypoint-initdb.d/05-create_indexes.sql:ro
-      - ../app/core/sql/reports.sql:/docker-entrypoint-initdb.d/06-reports.sql:ro
+      - ../app/core/sql/meter_daily_agg.sql:/docker-entrypoint-initdb.d/02-meter_daily_agg.sql:ro
+      - ../app/core/sql/anomaly_events.sql:/docker-entrypoint-initdb.d/03-anomaly_events.sql:ro
+      - ../app/core/sql/ai_anomaly_feedback.sql:/docker-entrypoint-initdb.d/04-ai_anomaly_feedback.sql:ro
+      - ../app/core/sql/ai_qa_sessions.sql:/docker-entrypoint-initdb.d/05-ai_qa_sessions.sql:ro
+      - ../app/core/sql/create_indexes.sql:/docker-entrypoint-initdb.d/06-create_indexes.sql:ro
+      - ../app/core/sql/reports.sql:/docker-entrypoint-initdb.d/07-reports.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d building_energy"]
       interval: 10s
