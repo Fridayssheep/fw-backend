@@ -20,6 +20,7 @@ from app.schemas.schemas_dashboard import DashboardTrendChart  # 导入 dashboar
 from app.schemas.schemas_dashboard import DashboardTrendSeries  # 导入 dashboard 折线图序列模型。
 from .service_common import ResourceNotFoundError  # 导入资源不存在异常，方便返回一致的 404 语义。
 from .service_common import build_api_time_range  # 导入接口时间范围构造函数，方便统一输出UTC+8时区。
+from .service_common import get_latest_timestamp  # 导入全局最新时间查询函数，方便获取数据库中实际最新数据时间。
 from .service_common import require_api_datetime  # 导入必填时间转换函数，方便输出 API 时间。
 from .service_common import resolve_numeric_data_status  # 导入统一数据状态判定函数，方便区分缺失值和真实零值。
 from .service_common import resolve_time_range  # 导入时间范围补齐函数，方便沿用现有默认时间逻辑。
@@ -673,13 +674,102 @@ def build_dashboard_anomalies(  # 定义构造 dashboard 异常摘要列表的�
     return anomaly_items  # 返回最终异常摘要列表。
 
 
+def get_top_anomalies_from_db(  # 定义从 anomaly_events 表按时间范围查询真实异常摘要的函数。
+    current_start: datetime,  # 接收查询开始时间。
+    current_end: datetime,  # 接收查询结束时间。
+    site_id: str | None,  # 接收站点编号参数。
+    building_id: str | None,  # 接收建筑编号参数。
+    limit: int = DASHBOARD_ANOMALY_LIMIT,  # 接收返回条数上限。
+    fallback_diagnostics: list[dict[str, Any]] | None = None,  # 接收规则派生结果，作为表不可用时的降级来源。
+) -> list[AnomalySummary]:  # 返回按时间范围过滤的异常摘要列表。
+    severity_order = "CASE UPPER(COALESCE(ae.severity, '')) WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 ELSE 4 END"  # 定义严重度排序表达式，按 HIGH > MEDIUM > LOW 降序优先。
+    clauses: list[str] = [  # 初始化基础过滤条件列表。
+        "ae.start_time >= :top_start",  # 限制事件开始时间不早于所选时间范围起点。
+        "ae.start_time < :top_end",  # 限制事件开始时间不晚于所选时间范围终点。
+    ]  # 完成基础条件初始化。
+    params: dict[str, Any] = {  # 初始化查询参数字典。
+        "top_start": current_start,  # 写入起始时间参数。
+        "top_end": current_end,  # 写入终止时间参数。
+        "top_limit": limit,  # 写入返回条数限制。
+    }  # 完成基础参数初始化。
+    if site_id:  # 如果前端传了站点过滤，
+        clauses.append("COALESCE(ae.site_id, bm.site_id) = :top_site_id")  # 就追加站点过滤条件，同时兼容事件没有 site_id 的情况。
+        params["top_site_id"] = site_id  # 写入站点参数。
+    if building_id:  # 如果前端传了建筑过滤，
+        clauses.append("ae.building_id = :top_building_id")  # 就追加建筑过滤条件。
+        params["top_building_id"] = building_id  # 写入建筑参数。
+    join_clause = "LEFT JOIN building_metadata bm ON ae.building_id = bm.building_id" if site_id else ""  # 只在需要站点过滤时才 JOIN building_metadata，避免不必要的关联查询。
+    try:  # 尝试从 anomaly_events 表查询真实异常事件列表。
+        rows = fetch_all(  # 查询指定时间范围内按严重度排序的真实异常事件。
+            f"""
+            SELECT
+                ae.id,
+                ae.building_id,
+                ae.site_id,
+                ae.meter,
+                ae.severity,
+                ae.start_time,
+                ae.description
+            FROM anomaly_events ae
+            {join_clause}
+            WHERE {' AND '.join(clauses)}
+            ORDER BY {severity_order} ASC, ae.start_time DESC
+            LIMIT :top_limit
+            """,
+            params,
+        )  # 执行真实异常事件查询。
+    except Exception:  # 如果 anomaly_events 表尚未初始化或查询失败，
+        return build_dashboard_anomalies(fallback_diagnostics or [], limit)  # 就回退到规则派生结果，保证接口不中断。
+    if not rows:  # 如果当前时间范围内没有真实异常事件，
+        return []  # 就直接返回空列表，不展示规则派生噪声。
+    anomaly_items: list[AnomalySummary] = []  # 初始化返回列表。
+    severity_label_map = {  # 定义严重度文本标准化映射。
+        "HIGH": "high",  # 映射 HIGH 到小写 high。
+        "MEDIUM": "medium",  # 映射 MEDIUM 到小写 medium。
+        "LOW": "low",  # 映射 LOW 到小写 low。
+    }  # 完成严重度映射初始化。
+    for row in rows:  # 遍历查询结果中的每一条真实异常事件。
+        raw_severity = str(row.get("severity") or "LOW").upper()  # 读取并标准化严重度字段。
+        normalized_severity = severity_label_map.get(raw_severity, "low")  # 把数据库严重度映射成接口小写格式，非法值回退到 low。
+        description_text = str(row.get("description") or "").strip()  # 读取并清理事件描述文本。
+        meter_text = str(row.get("meter") or DEFAULT_DASHBOARD_METER)  # 读取表计类型，缺失时回退到默认电耗口径。
+        title_text = description_text or f"{row['building_id']} {meter_text} 检测到{normalized_severity}级异常"  # 用事件描述生成标题；如果描述为空则生成默认标题。
+        anomaly_items.append(  # 把当前事件转换成 dashboard 异常摘要对象。
+            AnomalySummary(  # 创建异常摘要模型。
+                anomaly_id=f"evt-{row['id']}",  # 用真实事件主键生成唯一异常编号。
+                building_id=str(row["building_id"]),  # 写入建筑编号字段。
+                device_id=None,  # 当前项目没有真实设备主键，返回空值。
+                meter=meter_text,  # 写入真实表计类型字段。
+                severity=normalized_severity,  # 写入已标准化的严重等级字段。
+                status="open",  # 真实检测事件统一标记为 open 状态。
+                title=title_text,  # 写入异常标题字段。
+                start_time=require_api_datetime(row["start_time"]),  # 写入真实异常开始时间字段。
+            )  # 完成异常摘要对象创建。
+        )  # 完成当前异常摘要追加。
+    return anomaly_items  # 返回按时间范围过滤的真实异常摘要列表。
+
+
+def _resolve_data_latest_time(  # 定义从楼栋诊断结果中提取真实数据最新时间的辅助函数。
+    diagnostics: list[dict[str, Any]],  # 接收楼栋诊断结果列表。
+    fallback: datetime,  # 接收无命中数据时的兜底时间（通常是查询窗口截止时间）。
+) -> datetime:  # 返回数据库真实命中的最新数据时间。
+    actual_timestamps = [  # 从诊断结果中提取每栋建筑本期最新数据时间。
+        item["latest_timestamp"]  # 取当前建筑的最新采样时间。
+        for item in diagnostics  # 遍历所有诊断结果。
+        if item.get("latest_timestamp") is not None  # 只保留确实有数据命中的建筑。
+    ]  # 完成时间列表提取。
+    if not actual_timestamps:  # 如果当前查询范围内没有任何建筑命中真实数据，
+        return fallback  # 就回退到兜底时间，避免显示空值。
+    return max(actual_timestamps)  # 返回所有活跃建筑中最新的数据时间，代表数据库真实最新记录。
+
+
 def build_ai_summary_hint(  # 定义构造 dashboard 规则摘要提示的函数。
     diagnostics: list[dict[str, Any]],  # 接收楼栋诊断结果列表。
     anomalies: list[AnomalySummary],  # 接收异常摘要列表。
-    current_end: datetime,  # 接收当前周期结束时间。
+    data_latest_time: datetime,  # 接收数据库中真实命中的最新数据时间，不是查询窗口截止时间。
 ) -> str:  # 返回给前端展示的规则摘要提示文本。
     active_building_count = len([item for item in diagnostics if item["current_count"] > 0])  # 统计当前周期真实命中过电耗读数的活跃建筑数量。
-    latest_time_text = require_api_datetime(current_end).strftime("%Y-%m-%d %H:%M:%S %z")  # 把当前周期结束时间格式化成明确日期文本。
+    latest_time_text = require_api_datetime(data_latest_time).strftime("%Y-%m-%d %H:%M:%S %z")  # 把数据库中真实命中的最新数据时间格式化成明确日期文本。
     if anomalies:  # 如果当前已经识别出高能耗异常，
         top_anomaly = anomalies[0]  # 取排序最靠前的一条异常作为摘要核心对象。
         return f"当前 dashboard 默认基于 electricity 统计，数据最新时间为 {latest_time_text}；本期共有 {active_building_count} 栋活跃建筑，其中 {top_anomaly.building_id} 的规则异常最突出。异常列表为规则派生结果，不代表已建案件。"  # 返回包含明确日期和限制说明的摘要文本。
@@ -698,13 +788,14 @@ def build_dashboard_snapshot(  # 定义构造 dashboard 快照的函数。
     current_start, current_end, previous_start, previous_end = normalize_dashboard_window(resolved_start, resolved_end)  # 构造当前周期和上一周期时间范围。
     normalized_chart_range = normalize_dashboard_chart_range(chart_range)  # 标准化图表范围参数。
     diagnostics = build_building_diagnostics(get_dashboard_period_rows(current_start, current_end, previous_start, previous_end, site_id, building_id))  # 查询并构造楼栋诊断结果。
-    anomalies = build_dashboard_anomalies(diagnostics)  # 基于诊断结果构造异常摘要列表。
+    anomalies = get_top_anomalies_from_db(current_start, current_end, site_id, building_id, DASHBOARD_ANOMALY_LIMIT, diagnostics)  # 从 anomaly_events 表按时间范围查询真实异常摘要，规则派生结果作为降级回退。
     metrics = build_dashboard_metrics(scope_rows, diagnostics)  # 基于范围和诊断结果构造指标卡片列表。
     metrics_by_key = {metric.key: metric for metric in metrics}  # 把指标卡片整理成按 key 查询的映射。
     kpi_cards, bar_charts, quick_link_stats = build_dashboard_kpi_cards_and_bars(current_end, site_id, building_id)  # 构造顶部 KPI 卡片、柱状图和快捷统计信息。
     quick_link_stats["warning_count"] = int(round((metrics_by_key.get("high_energy_buildings").value if metrics_by_key.get("high_energy_buildings") else 0)))  # 把高能耗预警数量写入快捷统计信息。
     trend_chart = build_dashboard_trend_chart(current_end, site_id, building_id, normalized_chart_range)  # 构造折线图数据。
-    ai_summary_hint = build_ai_summary_hint(diagnostics, anomalies, current_end)  # 基于诊断结果和时间范围构造规则摘要文本。
+    global_latest_time = get_latest_timestamp([building_id] if building_id else None, site_id, DEFAULT_DASHBOARD_METER)  # 直接查询数据库中实际最新数据时间，不受 dashboard 查询窗口限制。
+    ai_summary_hint = build_ai_summary_hint(diagnostics, anomalies, global_latest_time)  # 用数据库中实际最新数据时间构造规则摘要文本。
     return {  # 返回 dashboard 快照字典。
         "time_range": build_api_time_range(current_start, current_end),  # 写入带时区的当前周期时间范围。
         "metrics": metrics,  # 写入指标卡片列表。
