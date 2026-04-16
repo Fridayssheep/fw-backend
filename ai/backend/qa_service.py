@@ -13,6 +13,7 @@ from app.schemas import AIReferenceItem
 from app.schemas import AISuggestedAction
 from app.schemas import AIUsedToolItem
 from app.schemas import AIQueryAssistantRequest
+from app.core.events import broker
 from app.services.services_energy import get_energy_compare
 from app.services.services_energy import get_energy_query
 from app.services.services_energy import get_energy_rankings
@@ -46,6 +47,10 @@ from .query_assistant_service import build_query_intent
 
 MAX_QA_REFERENCE_ITEMS = 5
 MAX_QA_SNIPPET_LENGTH = 320
+
+
+def _publish_qa_status(message: str, context: str = "", event_type: str = "ai_status") -> None:
+    broker.publish_sync(message=message, context=context, event_type=event_type)
 
 KNOWLEDGE_KEYWORDS = (
     "怎么",
@@ -577,6 +582,7 @@ def _execute_data_tool(tool_name: str, query_params: dict[str, Any]) -> dict[str
     """执行受控白名单内的数据工具，并统一返回 MCP 风格结果。"""
 
     if tool_name == "energy_query":
+        _publish_qa_status("执行能耗明细查询...", tool_name, event_type="mcp_tool")
         response = get_energy_query(
             building_ids=query_params.get("building_ids"),
             site_id=query_params.get("site_id"),
@@ -596,6 +602,7 @@ def _execute_data_tool(tool_name: str, query_params: dict[str, Any]) -> dict[str
         )
 
     if tool_name == "energy_trend":
+        _publish_qa_status("执行能耗趋势分析...", tool_name, event_type="mcp_tool")
         response = get_energy_trend(
             building_ids=query_params.get("building_ids"),
             site_id=query_params.get("site_id"),
@@ -612,6 +619,7 @@ def _execute_data_tool(tool_name: str, query_params: dict[str, Any]) -> dict[str
         )
 
     if tool_name == "energy_compare":
+        _publish_qa_status("执行建筑能耗对比...", tool_name, event_type="mcp_tool")
         response = get_energy_compare(
             building_ids=query_params.get("building_ids"),
             meter=query_params.get("meter"),
@@ -627,6 +635,7 @@ def _execute_data_tool(tool_name: str, query_params: dict[str, Any]) -> dict[str
         )
 
     if tool_name == "energy_rankings":
+        _publish_qa_status("执行能耗排行榜查询...", tool_name, event_type="mcp_tool")
         response = get_energy_rankings(
             meter=query_params.get("meter"),
             start_time=query_params.get("start_time"),
@@ -644,6 +653,7 @@ def _execute_data_tool(tool_name: str, query_params: dict[str, Any]) -> dict[str
         )
 
     if tool_name == "energy_weather_correlation":
+        _publish_qa_status("执行天气相关性分析...", tool_name, event_type="mcp_tool")
         building_id = str(
             query_params.get("building_id")
             or (list(query_params.get("building_ids") or [])[:1] or [""])[0]
@@ -701,6 +711,7 @@ def _handle_knowledge_question(payload: AIQARequest, settings_model: str) -> AIQ
     total_start = perf_counter()
     stage_timings_ms: dict[str, int] = {}
 
+    _publish_qa_status("检索知识库相关资料...", "search_domain_knowledge", event_type="mcp_tool")
     retrieval_start = perf_counter()
     retrieval_references = search_domain_knowledge_references(
         payload.question,
@@ -723,11 +734,13 @@ def _handle_knowledge_question(payload: AIQARequest, settings_model: str) -> AIQ
             target="knowledge_reference_panel",
         )
     ] if knowledge_references else []
+    _publish_qa_status("基于知识片段生成回答...", "knowledge_answer")
     knowledge_llm_start = perf_counter()
     answer = _generate_knowledge_answer(payload.question, knowledge_references, settings_model)
     stage_timings_ms["knowledge_llm_ms"] = _duration_ms(knowledge_llm_start)
 
     if _knowledge_answer_is_insufficient(answer):
+        _publish_qa_status("结构化证据不足，尝试补充 RAG 对话检索...", "answer_with_domain_knowledge", event_type="mcp_tool")
         rag_chat_start = perf_counter()
         rag_chat_result = answer_with_domain_knowledge(payload.question)
         stage_timings_ms["rag_chat_ms"] = _duration_ms(rag_chat_start)
@@ -758,6 +771,7 @@ def _handle_data_query_question(payload: AIQARequest, settings_model: str) -> AI
     """处理数据查询类问题。"""
 
     total_start = perf_counter()
+    _publish_qa_status("解析查询意图并抽取参数...", "query_assistant", event_type="mcp_tool")
     query_assistant_start = perf_counter()
     query_result = build_query_intent(
         AIQueryAssistantRequest(
@@ -782,6 +796,7 @@ def _handle_data_query_question(payload: AIQARequest, settings_model: str) -> AI
     answer = ""
 
     try:
+        _publish_qa_status("为当前问题选择最合适的数据工具...", "data_tool_selection")
         tool_selection_start = perf_counter()
         tool_name, tool_reason = _select_data_tool(payload.question, query_result)
         stage_timings_ms["data_tool_selection_ms"] = _duration_ms(tool_selection_start)
@@ -800,10 +815,12 @@ def _handle_data_query_question(payload: AIQARequest, settings_model: str) -> AI
         references = AIQAReferences(data=_build_executed_data_reference_items(tool_result))
         suggested_actions = _build_query_action(query_result, tool_name=tool_name)
 
+        _publish_qa_status("整理数据结果并生成结论...", "data_answer")
         data_answer_start = perf_counter()
         answer = _generate_data_answer(payload.question, tool_result, query_result.warnings)
         stage_timings_ms["data_answer_ms"] = _duration_ms(data_answer_start)
     except Exception:  # noqa: BLE001
+        _publish_qa_status("数据工具执行失败，回退为推荐查询方案。", "data_query_fallback")
         references = AIQAReferences(data=_build_data_reference_items(query_result))
         suggested_actions = _build_query_action(query_result)
         answer = _fallback_data_answer(query_result)
@@ -850,6 +867,7 @@ def _handle_fault_analysis_question(payload: AIQARequest, settings_model: str) -
         )
 
     context = payload.context
+    _publish_qa_status("调用异常诊断能力分析当前上下文...", "analyze_anomaly_with_ai", event_type="mcp_tool")
     anomaly_analysis_start = perf_counter()
     anomaly_result = analyze_anomaly_with_ai(
         AIAnalyzeAnomalyRequest(
@@ -893,6 +911,7 @@ def _handle_mixed_question(payload: AIQARequest, settings_model: str) -> AIQARes
     """
 
     total_start = perf_counter()
+    _publish_qa_status("识别到综合问题，开始并行编排多种能力...", "mixed_orchestration")
     signals = _detect_question_signals(payload.question)
     used_tools: list[AIUsedToolItem] = []
     suggested_actions: list[AISuggestedAction] = []
@@ -932,6 +951,7 @@ def _handle_mixed_question(payload: AIQARequest, settings_model: str) -> AIQARes
 
     references = _merge_references(*reference_groups)
     deduped_actions = _dedupe_actions(suggested_actions)
+    _publish_qa_status("汇总多路结果并生成最终回答...", "mixed_synthesis")
     mixed_synthesis_start = perf_counter()
     answer = _synthesize_mixed_answer(payload.question, answer_parts)
     stage_timings_ms["mixed_synthesis_ms"] = _duration_ms(mixed_synthesis_start)
@@ -958,6 +978,7 @@ def ask_ai_question(payload: AIQARequest) -> AIQAResponse:
     """
 
     settings = get_ai_settings()
+    _publish_qa_status("初始化会话并整理上下文...", "qa_session")
     session = get_or_create_session(payload.session_id, payload.context)
     recent_messages = load_recent_messages(session.session_id)
     effective_context = build_effective_context(session, payload.context, recent_messages)
@@ -974,6 +995,7 @@ def ask_ai_question(payload: AIQARequest) -> AIQAResponse:
     save_user_message(session.session_id, payload.question, effective_context)
     try:
         question_type = _classify_question_type(runtime_payload.question)
+        _publish_qa_status(f"已识别问题类型：{question_type}", "question_classification")
         if question_type == "data_query":
             response = _handle_data_query_question(runtime_payload, settings.llm_model)
         elif question_type == "mixed":
@@ -984,10 +1006,12 @@ def ask_ai_question(payload: AIQARequest) -> AIQAResponse:
             response = _handle_knowledge_question(runtime_payload, settings.llm_model)
 
         response.session_id = session.session_id
+        _publish_qa_status("回答已生成，正在写入会话记录...", "save_session_state")
         save_assistant_message(session.session_id, response, effective_context)
         update_session_state(session.session_id, payload.question, response, effective_context)
         return response
     except Exception as exc:  # noqa: BLE001
+        _publish_qa_status(f"调用链路失败：{type(exc).__name__}", "qa_error")
         error_message = f"调用工具失败：{type(exc).__name__}: {exc}"
         save_error_message(session.session_id, error_message, effective_context)
         update_session_failure_state(
