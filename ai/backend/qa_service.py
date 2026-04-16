@@ -86,6 +86,22 @@ FAULT_ANALYSIS_KEYWORDS = (
     "原因",
     "为什么",
 )
+ASSISTANT_CAPABILITY_PATTERNS = (
+    "你可以做什么",
+    "你能做什么",
+    "你会什么",
+    "你会做什么",
+    "能帮我做什么",
+    "可以帮我做什么",
+    "你支持什么",
+    "有什么能力",
+    "你的能力",
+    "你能帮我",
+    "怎么用你",
+    "如何使用你",
+    "你是什么",
+    "你是谁",
+)
 
 KNOWLEDGE_QA_SYSTEM_PROMPT = """\
 你是“建筑能源总览 AI”中的知识问答助手。
@@ -146,12 +162,51 @@ DATA_RESULT_QA_SYSTEM_PROMPT = """\
 - answer
 """
 
+QUESTION_ROUTER_SYSTEM_PROMPT = """\
+你是“建筑能源总览 AI”中的问题路由器。
+
+你的任务是理解用户真实意图，并把问题路由到最合适的能力类型。
+
+允许的 question_type 只有：
+- assistant_capability
+- knowledge
+- data_query
+- fault_analysis
+- mixed
+- other
+
+路由规则：
+1. 如果用户在问“你是谁、你能做什么、怎么用你、支持哪些能力”之类的助手自述问题，选 assistant_capability。
+2. 如果用户主要在问概念解释、规范、原理、术语、排查方法、说明文档等知识内容，选 knowledge。
+3. 如果用户主要想查看、统计、比较、排行、趋势分析真实业务数据，选 data_query。
+4. 如果用户主要在问异常原因、故障诊断、报警排查、为什么异常、如何定位问题，选 fault_analysis。
+5. 如果用户明显同时需要两种及以上能力，例如既要查数据又要解释原因，或既要知识解释又要结合当前异常分析，选 mixed。
+6. 只有在问题过于模糊、只是寒暄、或无法稳定判断时，才选 other。
+
+重要约束：
+1. 不要因为出现个别关键词就机械分类，要按用户真实意图判断。
+2. 即使当前上下文不足以真正执行异常分析，只要用户意图明显是诊断异常，也应该选 fault_analysis，由后续链路负责提示缺少上下文。
+3. 如果只是让助手介绍自己，不要路由到 knowledge。
+
+输出必须是合法 JSON，且只包含：
+- question_type
+- reason
+"""
+
 DATA_TOOL_NAME_BY_ENDPOINT = {
     "/energy/query": "energy_query",
     "/energy/trend": "energy_trend",
     "/energy/compare": "energy_compare",
     "/energy/rankings": "energy_rankings",
     "/energy/weather-correlation": "energy_weather_correlation",
+}
+VALID_QUESTION_TYPES = {
+    "assistant_capability",
+    "knowledge",
+    "data_query",
+    "fault_analysis",
+    "mixed",
+    "other",
 }
 
 
@@ -163,8 +218,11 @@ def _trim_text(value: str, max_length: int = MAX_QA_SNIPPET_LENGTH) -> str:
     return value[: max_length - 3].rstrip() + "..."
 
 
-def _classify_question_type(question: str) -> str:
-    """对问题做轻量分类，供总览式 AI 选择下一步工具。"""
+def _classify_question_type_by_rules(question: str) -> str:
+    """规则兜底分类，供模型路由失败时回退。"""
+
+    if _is_assistant_capability_question(question):
+        return "assistant_capability"
 
     signals = _detect_question_signals(question)
     hit_count = sum(1 for value in signals.values() if value)
@@ -179,6 +237,42 @@ def _classify_question_type(question: str) -> str:
     return "other"
 
 
+def _classify_question_type(question: str, context: AIQAContext | None) -> tuple[str, str]:
+    """优先使用模型理解问题意图，失败时回退到规则分类。"""
+
+    settings = get_ai_settings()
+    client = OpenAICompatibleClient(settings)
+    context_summary = {
+        "building_id": context.building_id if context else None,
+        "meter": context.meter if context else None,
+        "time_range": (
+            {
+                "start": context.time_range.start,
+                "end": context.time_range.end,
+            }
+            if context and context.time_range
+            else None
+        ),
+    }
+    user_prompt = (
+        f"【用户问题】\n{question}\n\n"
+        f"【当前上下文】\n{context_summary}\n"
+    )
+    try:
+        result = client.generate_json(QUESTION_ROUTER_SYSTEM_PROMPT, user_prompt)
+    except Exception:  # noqa: BLE001
+        fallback_type = _classify_question_type_by_rules(question)
+        return fallback_type, "模型路由失败，已回退到规则分类。"
+
+    question_type = str(result.get("question_type") or "").strip()
+    if question_type not in VALID_QUESTION_TYPES:
+        fallback_type = _classify_question_type_by_rules(question)
+        return fallback_type, "模型路由返回了非法类型，已回退到规则分类。"
+
+    reason = str(result.get("reason") or "").strip() or "主模型根据问题语义完成了能力路由。"
+    return question_type, reason
+
+
 def _detect_question_signals(question: str) -> dict[str, bool]:
     """识别问题中是否同时包含知识、数据、异常三类诉求。"""
 
@@ -191,6 +285,13 @@ def _detect_question_signals(question: str) -> dict[str, bool]:
         "data_query": any(item.lower() in lowered for item in DATA_QUERY_KEYWORDS),
         "knowledge": knowledge_hit,
     }
+
+
+def _is_assistant_capability_question(question: str) -> bool:
+    """识别用户是否在询问助手本身的定位、能力边界或使用方式。"""
+
+    normalized = question.strip().lower()
+    return any(pattern in normalized for pattern in ASSISTANT_CAPABILITY_PATTERNS)
 
 
 def _has_context_for_fault_analysis(context: AIQAContext | None) -> bool:
@@ -705,6 +806,88 @@ def _generate_data_answer(question: str, tool_result: dict[str, Any], query_warn
     return answer or _fallback_data_answer(query_result=None, tool_result=tool_result)
 
 
+def _build_capability_answer(context: AIQAContext | None) -> str:
+    """生成助手能力说明，避免元问题误触发知识库检索。"""
+
+    capability_lines = [
+        "我主要能做四类事情：",
+        "1. 回答运维知识问题，比如设备原理、维保规范、排查思路和术语解释。",
+        "2. 查询和解读能耗数据，比如趋势、排行、对比、明细和天气相关性。",
+        "3. 在上下文足够时做异常分析，比如结合建筑、表计和时间范围解释异常原因并给出排查建议。",
+        "4. 进行多轮追问，并把知识、数据和异常分析结果整理成一段可执行的结论。",
+        "",
+        "你可以直接这样问我：",
+        "- 最近一周哪些建筑能耗异常？",
+        "- 冷却水泵效率异常通常怎么排查？",
+        "- 分析 1A 楼最近 30 天电表能耗趋势。",
+        "- 解释这个建筑当前异常的可能原因，并给出处理建议。",
+        "",
+        "我当前不适合直接替你执行页面操作或修改业务数据，但我可以告诉你该查什么、为什么查，以及下一步建议去哪个页面。你也可以继续直接说你的目标，我会自动选择合适链路。"
+    ]
+
+    if context and context.building_id:
+        capability_lines.append("")
+        capability_lines.append(
+            f"当前如果你围绕建筑 {context.building_id} 继续提问，我会优先结合这部分上下文来回答。"
+        )
+
+    return "\n".join(capability_lines)
+
+
+def _handle_assistant_capability_question(payload: AIQARequest, settings_model: str) -> AIQAResponse:
+    """处理用户询问助手能力、定位和使用方式的元问题。"""
+
+    total_start = perf_counter()
+    _publish_qa_status("生成助手能力说明...", "assistant_capability")
+    references = AIQAReferences()
+    used_tools: list[AIUsedToolItem] = []
+    suggested_actions: list[AISuggestedAction] = []
+    answer = _build_capability_answer(payload.context)
+    stage_timings_ms = {
+        "total_ms": _duration_ms(total_start),
+    }
+    return AIQAResponse(
+        session_id="",
+        answer=answer,
+        question_type="assistant_capability",
+        references=references,
+        used_tools=used_tools,
+        suggested_actions=suggested_actions,
+        meta=_build_meta_with_timings(settings_model, used_tools, references, stage_timings_ms),
+    )
+
+
+def _handle_other_question(payload: AIQARequest, settings_model: str) -> AIQAResponse:
+    """处理寒暄、模糊问题或暂不适合直接进入工具链的问题。"""
+
+    total_start = perf_counter()
+    _publish_qa_status("生成通用引导回复...", "other_response")
+    references = AIQAReferences()
+    used_tools: list[AIUsedToolItem] = []
+    suggested_actions: list[AISuggestedAction] = []
+    answer = (
+        "我已经收到你的问题，但这轮意图还不够具体。"
+        "你可以直接告诉我想查什么数据、想解释什么知识，或者想分析哪个建筑/表计在什么时间范围内的异常。"
+        "\n\n例如：\n"
+        "- 查最近一周能耗异常的建筑\n"
+        "- 解释冷却水泵效率异常通常怎么排查\n"
+        "- 分析 1A 楼最近 30 天电表能耗趋势\n"
+        "- 判断这个建筑当前异常的可能原因"
+    )
+    stage_timings_ms = {
+        "total_ms": _duration_ms(total_start),
+    }
+    return AIQAResponse(
+        session_id="",
+        answer=answer,
+        question_type="other",
+        references=references,
+        used_tools=used_tools,
+        suggested_actions=suggested_actions,
+        meta=_build_meta_with_timings(settings_model, used_tools, references, stage_timings_ms),
+    )
+
+
 def _handle_knowledge_question(payload: AIQARequest, settings_model: str) -> AIQAResponse:
     """处理知识库问答类问题。"""
 
@@ -994,17 +1177,36 @@ def ask_ai_question(payload: AIQARequest) -> AIQAResponse:
     )
     save_user_message(session.session_id, payload.question, effective_context)
     try:
-        question_type = _classify_question_type(runtime_payload.question)
-        _publish_qa_status(f"已识别问题类型：{question_type}", "question_classification")
+        routing_start = perf_counter()
+        question_type, route_reason = _classify_question_type(runtime_payload.question, effective_context)
+        routing_ms = _duration_ms(routing_start)
+        _publish_qa_status(f"已识别问题类型：{question_type}", route_reason or "question_classification")
         if question_type == "data_query":
             response = _handle_data_query_question(runtime_payload, settings.llm_model)
+        elif question_type == "assistant_capability":
+            response = _handle_assistant_capability_question(runtime_payload, settings.llm_model)
         elif question_type == "mixed":
             response = _handle_mixed_question(runtime_payload, settings.llm_model)
         elif question_type == "fault_analysis":
             response = _handle_fault_analysis_question(runtime_payload, settings.llm_model)
+        elif question_type == "other":
+            response = _handle_other_question(runtime_payload, settings.llm_model)
         else:
             response = _handle_knowledge_question(runtime_payload, settings.llm_model)
 
+        response.used_tools = [
+            AIUsedToolItem(
+                tool_name="qa_intent_router",
+                tool_type="internal_service",
+                reason=route_reason,
+            ),
+            *response.used_tools,
+        ]
+        response.meta.used_tools_count = len(response.used_tools)
+        response.meta.stage_timings_ms = {
+            "question_routing_ms": routing_ms,
+            **response.meta.stage_timings_ms,
+        }
         response.session_id = session.session_id
         _publish_qa_status("回答已生成，正在写入会话记录...", "save_session_state")
         save_assistant_message(session.session_id, response, effective_context)
