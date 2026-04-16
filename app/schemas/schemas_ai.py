@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from .schemas_common import CurrentTimeContext
+from .schemas_common import Pagination
 from .schemas_common import TimeRange
 from .schemas_energy import AnomalyDetectorBreakdownItem
 
@@ -471,6 +472,40 @@ class AIQAResponse(BaseModel):
     used_tools: list[AIUsedToolItem] = Field(default_factory=list, description="内部已使用工具")
     suggested_actions: list[AISuggestedAction] = Field(default_factory=list, description="建议前端动作")
     meta: AIQAMeta = Field(..., description="调用元信息")
+
+
+class AIQASessionSummary(BaseModel):
+    session_id: str = Field(..., description="AI 会话 ID")
+    title: str = Field(..., description="会话标题")
+    last_question_type: str | None = Field(None, description="最近一轮识别出的问题类型")
+    sticky_context: AIQAContext | None = Field(None, description="当前会话保留的业务上下文")
+    last_message: str | None = Field(None, description="最近一条消息预览")
+    message_count: int = Field(default=0, description="会话内消息总数")
+    created_at: datetime = Field(..., description="会话创建时间")
+    updated_at: datetime = Field(..., description="最近更新时间")
+
+
+class AIQASessionMessage(BaseModel):
+    message_id: str = Field(..., description="消息 ID")
+    role: str = Field(..., description="消息角色：user / assistant")
+    question_type: str | None = Field(None, description="assistant 消息对应的问题类型")
+    content: str = Field(..., description="消息内容")
+    context: AIQAContext | None = Field(None, description="该轮消息携带的上下文")
+    references: AIQAReferences = Field(default_factory=AIQAReferences, description="该轮 assistant 消息引用")
+    used_tools: list[AIUsedToolItem] = Field(default_factory=list, description="该轮 assistant 消息使用的工具")
+    suggested_actions: list[AISuggestedAction] = Field(default_factory=list, description="该轮 assistant 消息建议动作")
+    created_at: datetime = Field(..., description="消息创建时间")
+
+
+class AIQASessionListResponse(BaseModel):
+    items: list[AIQASessionSummary] = Field(default_factory=list, description="AI 历史会话列表")
+    pagination: Pagination = Field(..., description="分页信息")
+
+
+class AIQASessionDetailResponse(BaseModel):
+    session: AIQASessionSummary = Field(..., description="会话摘要")
+    messages: list[AIQASessionMessage] = Field(default_factory=list, description="该会话下的历史消息")
+
 
 class AIQASessionDeleteResponse(BaseModel):
     session_id: str = Field(..., description="被删除的 AI 会话 ID")
