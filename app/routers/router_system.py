@@ -11,7 +11,7 @@ from fastapi import UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.core.events import broker
-from app.jobs.offline_anomaly_detector import run_batch_pipeline
+from app.jobs.offline_anomaly_detector import run_batch_pipeline, is_pipeline_running
 from app.schemas.schemas_system import RuntimeAISettingsResponse
 from app.schemas.schemas_system import RuntimeAISettingsUpdateRequest
 from app.schemas.schemas_system import RuntimeAISettingsUpdateResponse
@@ -71,6 +71,12 @@ async def anomaly_progress_stream_api(request: Request):
 
 @router.post("/dataset/trigger-detection", summary="Trigger offline anomaly detection task")
 def trigger_anomaly_detection_api(background_tasks: BackgroundTasks) -> dict[str, str]:
+    if is_pipeline_running():
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=409,
+            content={"status": "conflict", "message": "异常检测任务正在运行中，请等待当前任务完成后再试"}
+        )
     background_tasks.add_task(run_batch_pipeline)
     return {"status": "ok", "message": "Anomaly detection task has been queued."}
 

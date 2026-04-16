@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine, text
@@ -166,27 +167,51 @@ def detect_anomalies_for_series(building_id, meter, last_analyzed_time):
         
     return events_to_insert
 
+# 管道运行锁：防止多次触发产生多个并行管道
+_pipeline_lock = threading.Lock()
+_pipeline_running = False
+
+
+def is_pipeline_running() -> bool:
+    """查询管道是否正在运行（供路由层调用）"""
+    return _pipeline_running
+
+
 def run_batch_pipeline():
-    print("====== 启动能耗数据历史跑批诊断管道 (Batch Pipeline) ======")
-    start_time = time.time()
-    
-    # 拿到所有的任务组合，全线上线时去掉 LIMIT
-    tasks = get_target_tasks(limit=None) 
-    
-    total_events = 0
-    total_tasks = len(tasks)
-    
-    for i, (building_id, meter, last_analyzed_time) in enumerate(tasks):
+    global _pipeline_running
+
+    # 如果已有管道在跑，直接跳过
+    if not _pipeline_lock.acquire(blocking=False):
+        msg = "检测管道已在运行中，跳过重复触发"
+        print(f"[{time.strftime('%H:%M:%S')}] {msg}")
         if broker:
-            broker.publish_sync(message=f"进度: {i+1}/{total_tasks}", event_type="anomaly_detect_progress")
-        events = detect_anomalies_for_series(building_id, meter, last_analyzed_time)
-        total_events += len(events)
-        
-    
-    final_msg = f"管道执行完毕，总计发现并记录了 {total_events} 条异常事件！(耗时 {time.time() - start_time:.2f}s)"
-    print("\n====== " + final_msg + " ======")
-    if broker:
-        broker.publish_sync(message=final_msg, event_type="anomaly_detect_complete")
+            broker.publish_sync(message=msg, event_type="anomaly_detect_progress")
+        return
+
+    try:
+        _pipeline_running = True
+        print("====== 启动能耗数据历史跑批诊断管道 (Batch Pipeline) ======")
+        start_time_ts = time.time()
+
+        # 拿到所有的任务组合，全线上线时去掉 LIMIT
+        tasks = get_target_tasks(limit=None)
+
+        total_events = 0
+        total_tasks = len(tasks)
+
+        for i, (building_id, meter, last_analyzed_time) in enumerate(tasks):
+            if broker:
+                broker.publish_sync(message=f"进度: {i+1}/{total_tasks}", event_type="anomaly_detect_progress")
+            events = detect_anomalies_for_series(building_id, meter, last_analyzed_time)
+            total_events += len(events)
+
+        final_msg = f"管道执行完毕，总计发现并记录了 {total_events} 条异常事件！(耗时 {time.time() - start_time_ts:.2f}s)"
+        print("\n====== " + final_msg + " ======")
+        if broker:
+            broker.publish_sync(message=final_msg, event_type="anomaly_detect_complete")
+    finally:
+        _pipeline_running = False
+        _pipeline_lock.release()
 
 if __name__ == "__main__":
     run_batch_pipeline()
