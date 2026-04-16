@@ -47,7 +47,8 @@ async def ai_status_stream_api(request: Request):
     后端会在调用底层各种工具时自动向此流推送状态更新。
     """
     async def event_generator():
-        q = broker.add_client()
+        # 只订阅 AI 工具调用事件，不接收离线异常检测进度
+        q = broker.add_client(topics={"mcp_tool"})
         try:
             while True:
                 if await request.is_disconnected():

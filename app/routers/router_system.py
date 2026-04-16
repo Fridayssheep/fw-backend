@@ -53,7 +53,8 @@ def update_runtime_ai_settings_api(payload: RuntimeAISettingsUpdateRequest) -> R
 @router.get("/dataset/anomaly-progress", summary="Offline anomaly progress stream (SSE)")
 async def anomaly_progress_stream_api(request: Request):
     async def event_generator():
-        q = broker.add_client()
+        # 只订阅离线异常检测相关事件，不接收 AI 工具等无关事件
+        q = broker.add_client(topics={"anomaly_detect_progress", "anomaly_detect_complete"})
         try:
             while True:
                 if await request.is_disconnected():
