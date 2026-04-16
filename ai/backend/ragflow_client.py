@@ -1,5 +1,6 @@
 import logging
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 
@@ -60,8 +61,20 @@ class RagFlowClient:
         }
 
     def _ensure_basic_config(self) -> None:
+        if not self._api_url():
+            raise RagFlowConfigurationError("RAGFlow API URL 未配置。")
         if not self._api_key():
             raise RagFlowConfigurationError("RAGFlow API key 未配置。")
+
+    def _handle_response_errors(self, response: httpx.Response) -> None:
+        if response.status_code in {401, 403}:
+            raise RagFlowAuthenticationError("RAGFlow 鉴权失败，请检查 API key。")
+        if response.status_code == 404:
+            raise RagFlowNotFoundError("RAGFlow 上游资源不存在，请检查 Chat ID 或路径配置。")
+        if 400 <= response.status_code < 500:
+            raise RagFlowUpstreamError(f"RAGFlow 请求被拒绝: HTTP {response.status_code}。")
+        if response.status_code >= 500:
+            raise RagFlowUpstreamError(f"RAGFlow 上游服务异常: HTTP {response.status_code}。")
 
     def _request_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -72,19 +85,39 @@ class RagFlowClient:
         except httpx.RequestError as exc:
             raise RagFlowUpstreamError(f"无法连接到 RAGFlow 服务: {exc}") from exc
 
-        if response.status_code in {401, 403}:
-            raise RagFlowAuthenticationError("RAGFlow 鉴权失败，请检查 API key。")
-        if response.status_code == 404:
-            raise RagFlowNotFoundError("RAGFlow 上游资源不存在，请检查 Chat ID 或路径配置。")
-        if 400 <= response.status_code < 500:
-            raise RagFlowUpstreamError(f"RAGFlow 请求被拒绝: HTTP {response.status_code}。")
-        if response.status_code >= 500:
-            raise RagFlowUpstreamError(f"RAGFlow 上游服务异常: HTTP {response.status_code}。")
+        self._handle_response_errors(response)
 
         try:
             return response.json()
         except ValueError as exc:
             raise RagFlowInvalidResponseError("RAGFlow 返回了无法解析的 JSON。") from exc
+
+    def _request_get_json(self, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            with httpx.Client(timeout=self._settings().ragflow_timeout_seconds, trust_env=False) as client:
+                response = client.get(url, headers=self._headers(), params=params)
+        except httpx.TimeoutException as exc:
+            raise RagFlowTimeoutError("RAGFlow 请求超时。") from exc
+        except httpx.RequestError as exc:
+            raise RagFlowUpstreamError(f"无法连接到 RAGFlow 服务: {exc}") from exc
+
+        self._handle_response_errors(response)
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise RagFlowInvalidResponseError("RAGFlow 返回了无法解析的 JSON。") from exc
+
+    def _request_get_bytes(self, url: str) -> tuple[bytes, httpx.Headers]:
+        try:
+            with httpx.Client(timeout=self._settings().ragflow_timeout_seconds, trust_env=False) as client:
+                response = client.get(url, headers=self._headers())
+        except httpx.TimeoutException as exc:
+            raise RagFlowTimeoutError("RAGFlow 请求超时。") from exc
+        except httpx.RequestError as exc:
+            raise RagFlowUpstreamError(f"无法连接到 RAGFlow 服务: {exc}") from exc
+
+        self._handle_response_errors(response)
+        return response.content, response.headers
 
     def _normalize_reference(self, raw_reference: Any) -> dict[str, list[dict[str, Any]]]:
         if not isinstance(raw_reference, dict):
@@ -206,6 +239,19 @@ class RagFlowClient:
             ),
         )
 
+    def _extract_data_list(self, body: dict[str, Any], *, list_key: str | None = None) -> list[dict[str, Any]]:
+        data = body.get("data")
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            if list_key and isinstance(data.get(list_key), list):
+                return [item for item in data.get(list_key, []) if isinstance(item, dict)]
+            if isinstance(data.get("items"), list):
+                return [item for item in data.get("items", []) if isinstance(item, dict)]
+            if isinstance(data.get("docs"), list):
+                return [item for item in data.get("docs", []) if isinstance(item, dict)]
+        raise RagFlowInvalidResponseError("RAGFlow 返回结构不符合预期。")
+
     def retrieve_references(
         self,
         question: str,
@@ -323,6 +369,63 @@ class RagFlowClient:
             }
 
         raise RagFlowInvalidResponseError("RAGFlow 聊天返回结构不符合预期。")
+
+    def list_datasets(self, page: int = 1, page_size: int = 100) -> list[dict[str, Any]]:
+        self._ensure_basic_config()
+        url = f"{self._api_url()}/datasets"
+        body = self._request_get_json(
+            url,
+            params={
+                "page": page,
+                "page_size": page_size,
+            },
+        )
+        datasets = self._extract_data_list(body)
+        return [
+            {
+                "id": item.get("id") or item.get("dataset_id"),
+                "name": item.get("name") or item.get("title"),
+            }
+            for item in datasets
+            if item.get("id") or item.get("dataset_id")
+        ]
+
+    def list_dataset_documents(
+        self,
+        dataset_id: str,
+        *,
+        keywords: str | None = None,
+        page: int = 1,
+        page_size: int = 200,
+    ) -> list[dict[str, Any]]:
+        self._ensure_basic_config()
+        url = f"{self._api_url()}/datasets/{dataset_id}/documents"
+        params: dict[str, Any] = {
+            "page": page,
+            "page_size": page_size,
+        }
+        if keywords:
+            params["keywords"] = keywords
+        body = self._request_get_json(url, params=params)
+        return self._extract_data_list(body, list_key="docs")
+
+    def download_document(self, dataset_id: str, document_id: str) -> dict[str, Any]:
+        self._ensure_basic_config()
+        url = f"{self._api_url()}/datasets/{dataset_id}/documents/{document_id}"
+        content, headers = self._request_get_bytes(url)
+        content_disposition = str(headers.get("content-disposition") or "")
+        filename = document_id
+        if "filename*=" in content_disposition:
+            filename = unquote(
+                content_disposition.split("filename*=", 1)[1].split("''", 1)[-1].strip().strip('"')
+            ) or filename
+        elif "filename=" in content_disposition:
+            filename = content_disposition.split("filename=", 1)[1].strip().strip('"') or filename
+        return {
+            "content": content,
+            "content_type": headers.get("content-type") or "application/octet-stream",
+            "filename": filename,
+        }
 
 
 ragflow_client = RagFlowClient()

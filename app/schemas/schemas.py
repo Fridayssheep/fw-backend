@@ -87,6 +87,8 @@ from .schemas_energy import EnergyTrendResponse
 from .schemas_energy import WeatherCorrelationResponse
 from .schemas_energy import WeatherFactor
 from .schemas_energy import WeatherPoint
+from .schemas_knowledge import KnowledgeDocument
+from .schemas_knowledge import KnowledgeDocumentListResponse
 from .schemas_meters import Device
 from .schemas_meters import DeviceAlarm
 from .schemas_meters import DeviceAlarmListResponse
@@ -218,6 +220,8 @@ __all__ = [
     "MeterSummary",
     "MetricCard",
     "Pagination",
+    "KnowledgeDocument",
+    "KnowledgeDocumentListResponse",
     "SelectedCauseSummary",
     "RuntimeAIFeatureSettings",
     "RuntimeAISettingsPayload",

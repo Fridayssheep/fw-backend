@@ -10,6 +10,10 @@ ON meter_readings (meter, timestamp, building_id);
 CREATE INDEX IF NOT EXISTS idx_meters_time 
 ON meter_readings (timestamp);
 
+-- 缺失索引：针对峰值/极值查询，优化 ORDER BY meter_reading DESC
+CREATE INDEX IF NOT EXISTS idx_meters_reading 
+ON meter_readings (meter_reading);
+
 -- 元数据主键索引
 CREATE INDEX IF NOT EXISTS idx_metadata_building_id 
 ON building_metadata (building_id);

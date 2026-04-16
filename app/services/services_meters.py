@@ -182,6 +182,23 @@ def get_meters(
         clauses.append("mr.meter = :meter_type")
         params["meter_type"] = normalized_meter_type
 
+    safe_page, safe_page_size, offset = normalize_pagination(page, page_size)
+
+    # 1. 先查询符合条件的唯一表计总数（按建筑+表计类型去重）
+    total_count = fetch_scalar(
+        f"""
+        SELECT COUNT(*)
+        FROM (
+            SELECT building_id, meter
+            FROM meter_readings mr
+            WHERE {' AND '.join(clauses)}
+            GROUP BY 1, 2
+        ) AS unique_meters
+        """,
+        params,
+    ) or 0
+
+    # 2. 分页查询表计列表及其最新活跃时间
     rows = fetch_all(
         f"""
         SELECT
@@ -192,21 +209,24 @@ def get_meters(
         WHERE {' AND '.join(clauses)}
         GROUP BY mr.building_id, mr.meter
         ORDER BY mr.building_id ASC, mr.meter ASC
+        LIMIT :limit OFFSET :offset
         """,
-        params,
+        {**params, "limit": safe_page_size, "offset": offset},
     )
+
     reference_latest = get_latest_timestamp()
     items = [map_meter_row_to_model(row, reference_latest) for row in rows]
 
+    # 注意：这里的 status 过滤由于是计算出来的，目前暂不支持在 SQL 层直接过滤，
+    # 暂时保持在内存中过滤，但由于已经有了 LIMIT 分页，性能风险已大大降低。
+    # 如果未来需要高性能状态过滤，建议在表里增加 status 冗余字段或物化视图。
     normalized_status = normalize_text(status)
     if normalized_status:
         items = [item for item in items if item.status.value.lower() == normalized_status.lower()]
 
-    safe_page, safe_page_size, offset = normalize_pagination(page, page_size)
-    paged_items = items[offset : offset + safe_page_size]
     return MeterListResponse(
-        items=paged_items,
-        pagination=Pagination(page=safe_page, page_size=safe_page_size, total=len(items)),
+        items=items,
+        pagination=Pagination(page=safe_page, page_size=safe_page_size, total=int(total_count)),
     )
 
 
