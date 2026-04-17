@@ -70,6 +70,9 @@ from .schemas_common import TimeRange
 from .schemas_energy import CopAnalysisResponse
 from .schemas_energy import CopPoint
 from .schemas_energy import CopSummary
+from .schemas_energy import BuildingWeatherPoint  # 导入建筑天气点位模型，方便聚合导出。
+from .schemas_energy import BuildingWeatherQueryResponse  # 导入建筑天气查询响应模型，方便聚合导出。
+from .schemas_energy import BuildingWeatherSeries  # 导入建筑天气序列模型，方便聚合导出。
 from .schemas_energy import AnomalyDetectorBreakdownItem
 from .schemas_energy import DetectedAnomalyEvent
 from .schemas_energy import EnergyAnomalyAnalysisRequest
@@ -179,6 +182,9 @@ __all__ = [
     "AnomalyFeedbackRequest",
     "AnomalyFeedbackResponse",
     "Building",
+    "BuildingWeatherPoint",  # 导出建筑天气点位模型。
+    "BuildingWeatherQueryResponse",  # 导出建筑天气查询响应模型。
+    "BuildingWeatherSeries",  # 导出建筑天气序列模型。
     "BuildingDetailResponse",
     "BuildingListResponse",
     "CandidateFeedbackItem",

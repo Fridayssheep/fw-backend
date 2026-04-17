@@ -12,6 +12,9 @@ from app.schemas.schemas_common import Pagination  # 导入分页模型，方便
 from app.schemas.schemas_energy import CopAnalysisResponse  # 导入 COP 响应模型。
 from app.schemas.schemas_energy import CopPoint  # 导入 COP 点模型。
 from app.schemas.schemas_energy import CopSummary  # 导入 COP 摘要模型。
+from app.schemas.schemas_energy import BuildingWeatherPoint  # 导入建筑天气点模型。
+from app.schemas.schemas_energy import BuildingWeatherQueryResponse  # 导入建筑天气查询响应模型。
+from app.schemas.schemas_energy import BuildingWeatherSeries  # 导入建筑天气序列模型。
 from app.schemas.schemas_energy import EnergyCompareItem  # 导入能耗对比项模型。
 from app.schemas.schemas_energy import EnergyCompareResponse  # 导入能耗对比响应模型。
 from app.schemas.schemas_energy import EnergyPoint  # 导入能耗点模型。
@@ -36,6 +39,7 @@ from .service_common import require_api_datetime  # 导入强制转换接口时�
 from .service_common import resolve_numeric_data_status  # 导入统一数据状态判定函数，方便区分缺失值和有效值。
 from .service_common import resolve_time_range  # 导入补齐时间范围的函数。
 from .service_common import round_optional_float  # 导入可空数值四舍五入函数，避免把缺失值误写成 0。
+from .service_common import to_db_datetime  # 导入数据库时间转换函数，方便解析天气查询时间范围。
 from .service_common import to_api_datetime  # 导入转换接口输出时间的函数。
 
 
@@ -90,6 +94,45 @@ def normalize_ranking_metric(metric: str | None) -> str:  # 定义标准化排�
 
 def normalize_order(order: str | None) -> str:  # 定义标准化排序方向的函数。
     return "ASC" if order and order.lower() == "asc" else "DESC"  # 只有显式传 asc 才升序，否则默认降序。
+
+
+def normalize_weather_building_ids(building_ids: list[str] | None) -> list[str]:  # 定义标准化天气查询建筑编号列表的函数。
+    normalized_ids: list[str] = []  # 初始化标准化后的建筑编号列表。
+    seen_ids: set[str] = set()  # 初始化去重集合，避免同一建筑重复查询。
+    for raw_building_id in building_ids or []:  # 遍历前端传入的所有建筑编号。
+        normalized_id = str(raw_building_id).strip()  # 先把当前建筑编号转成字符串并清理首尾空白。
+        if not normalized_id:  # 如果当前建筑编号是空字符串，
+            continue  # 就直接跳过，避免拼出无效 SQL 条件。
+        if normalized_id in seen_ids:  # 如果当前建筑编号已经出现过，
+            continue  # 就跳过重复项，避免重复输出同一栋楼。
+        seen_ids.add(normalized_id)  # 把当前建筑编号加入去重集合。
+        normalized_ids.append(normalized_id)  # 把当前建筑编号加入最终列表。
+    return normalized_ids  # 返回标准化后的建筑编号列表。
+
+
+def resolve_weather_time_range(  # 定义解析天气查询时间范围的函数。
+    start_time: datetime | str | None,  # 接收前端传入的开始时间。
+    end_time: datetime | str | None,  # 接收前端传入的结束时间。
+    building_ids: list[str],  # 接收标准化后的建筑编号列表。
+) -> tuple[datetime, datetime]:  # 返回解析后的开始时间和结束时间。
+    normalized_start = to_db_datetime(start_time)  # 先把开始时间解析成数据库可用时间。
+    normalized_end = to_db_datetime(end_time)  # 先把结束时间解析成数据库可用时间。
+    building_clause, building_params = build_in_clause("bm.building_id", building_ids, "weather_building_id")  # 构造建筑过滤 IN 条件。
+    latest_weather_time = fetch_scalar(  # 查询当前建筑集合对应的最新天气时间。
+        f"""
+        SELECT MAX(wd.timestamp)
+        FROM building_metadata bm
+        JOIN weather_data wd ON bm.site_id = wd.site_id
+        WHERE {building_clause}
+        """,
+        building_params,
+    )  # 执行天气时间上界查询。
+    fallback_start, fallback_end = resolve_time_range(start_time, end_time, building_ids, None, None)  # 同时准备通用时间范围兜底，避免完全无天气数据时无法返回时间窗。
+    resolved_end = normalized_end or latest_weather_time or fallback_end  # 优先使用前端结束时间，其次使用天气最新时间，最后走通用兜底。
+    resolved_start = normalized_start or (resolved_end - timedelta(days=7))  # 如果前端没传开始时间，就按结束时间回溯 7 天。
+    if start_time is None and end_time is None and latest_weather_time is None:  # 如果前端完全没传时间且天气表没有命中数据，
+        resolved_start = fallback_start  # 就回退到通用兜底开始时间，保持与其他接口一致。
+    return resolved_start, resolved_end  # 返回最终时间范围。
 
 
 def build_energy_filters(  # 定义构造能耗查询通用过滤条件的函数。
@@ -758,3 +801,108 @@ def get_weather_context(  # 定义查询天气上下文的函数。
         )  # 完成天气点对象创建。
         for row in rows  # 遍历所有天气结果行。
     ]  # 完成天气点列表构造。
+
+
+def get_energy_weather(  # 定义建筑天气查询接口业务函数。
+    building_ids: list[str] | None,  # 接收建筑编号列表。
+    start_time: datetime | str | None,  # 接收开始时间。
+    end_time: datetime | str | None,  # 接收结束时间。
+    granularity: str | None,  # 接收时间粒度。
+) -> BuildingWeatherQueryResponse:  # 返回建筑天气查询响应模型。
+    normalized_building_ids = normalize_weather_building_ids(building_ids)  # 先标准化建筑编号列表，清理空字符串并去重。
+    if not normalized_building_ids:  # 如果最终没有有效建筑编号，
+        raise ValueError("building_ids 不能为空，至少需要传入一个建筑编号。")  # 就返回参数校验错误，提醒调用方必须传值。
+    normalized_granularity = normalize_granularity(granularity)  # 标准化时间粒度，非法值会自动回退到 day。
+    resolved_start, resolved_end = resolve_weather_time_range(start_time, end_time, normalized_building_ids)  # 解析天气查询时间范围。
+    if resolved_start > resolved_end:  # 如果开始时间晚于结束时间，
+        raise ValueError("start_time 不能晚于 end_time。")  # 就抛出参数错误，避免返回混乱数据。
+    building_clause, building_params = build_in_clause("bm.building_id", normalized_building_ids, "weather_building_id")  # 构造建筑编号过滤条件。
+    metadata_rows = fetch_all(  # 查询建筑和站点映射关系。
+        f"""
+        SELECT
+            bm.building_id AS building_id,
+            bm.site_id AS site_id
+        FROM building_metadata bm
+        WHERE {building_clause}
+        """,
+        building_params,
+    )  # 执行建筑元数据查询。
+    building_site_map: dict[str, str | None] = {}  # 初始化建筑到站点的映射字典。
+    for row in metadata_rows:  # 遍历所有建筑元数据行。
+        building_id = str(row["building_id"])  # 读取当前建筑编号并统一转成字符串。
+        site_id_raw = row.get("site_id")  # 读取当前建筑关联的站点编号原始值。
+        site_id_text = str(site_id_raw).strip() if site_id_raw is not None else ""  # 把站点编号清理成文本，方便统一判空。
+        building_site_map[building_id] = site_id_text or None  # 写入建筑到站点的映射；空字符串会被标准化成空值。
+    missing_building_ids = [building_id for building_id in normalized_building_ids if building_id not in building_site_map]  # 收集元数据里不存在的建筑编号。
+    weather_rows = fetch_all(  # 查询并聚合指定建筑集合的天气数据。
+        f"""
+        SELECT
+            bm.building_id AS building_id,
+            bm.site_id AS site_id,
+            date_trunc('{normalized_granularity}', wd.timestamp) AS timestamp,
+            AVG(wd."airTemperature") AS air_temperature,
+            AVG(wd."dewTemperature") AS dew_temperature,
+            AVG(wd."windSpeed") AS wind_speed,
+            COUNT(wd.timestamp) AS reading_count
+        FROM building_metadata bm
+        JOIN weather_data wd ON bm.site_id = wd.site_id
+        WHERE {building_clause}
+          AND wd.timestamp >= :start_time
+          AND wd.timestamp <= :end_time
+        GROUP BY 1, 2, 3
+        ORDER BY 1 ASC, 3 ASC
+        """,
+        {**building_params, "start_time": resolved_start, "end_time": resolved_end},
+    )  # 执行天气聚合查询。
+    weather_bucket_map: dict[str, dict[datetime, dict[str, Any]]] = defaultdict(dict)  # 初始化建筑到天气时间桶数据的映射。
+    for row in weather_rows:  # 遍历所有天气聚合结果行。
+        building_id = str(row["building_id"])  # 读取当前结果所属建筑编号。
+        weather_bucket_map[building_id][row["timestamp"]] = row  # 把当前时间桶聚合结果写入建筑映射。
+    bucket_times = build_expected_time_buckets(resolved_start, resolved_end, normalized_granularity)  # 按时间范围构造完整时间桶，确保缺失点会被显式返回。
+    series: list[BuildingWeatherSeries] = []  # 初始化建筑天气序列列表。
+    for building_id in normalized_building_ids:  # 按调用方传入顺序构造每栋楼的天气序列。
+        site_id = building_site_map.get(building_id)  # 读取当前建筑对应的站点编号。
+        if site_id is None:  # 如果当前建筑在元数据里不存在或站点为空，
+            series.append(  # 就写入一个显式缺失序列，方便前端直接提示。
+                BuildingWeatherSeries(  # 创建当前建筑的缺失序列对象。
+                    building_id=building_id,  # 写入建筑编号字段。
+                    site_id=None,  # 缺失建筑没有可用站点编号。
+                    points=[],  # 缺失建筑不返回点位。
+                    data_status=resolve_numeric_data_status(has_data=False),  # 把序列状态标记为 missing。
+                    data_note="当前建筑不存在或未绑定 site_id，无法匹配天气数据。",  # 写入缺失说明文本。
+                )  # 完成缺失序列对象创建。
+            )  # 完成缺失序列追加。
+            continue  # 继续处理下一个建筑。
+        point_rows = weather_bucket_map.get(building_id, {})  # 读取当前建筑所有时间桶天气结果。
+        points: list[BuildingWeatherPoint] = []  # 初始化当前建筑天气点位列表。
+        has_series_data = False  # 初始化当前建筑是否命中天气数据的标记。
+        for bucket_time in bucket_times:  # 逐个时间桶构造天气点位。
+            payload = point_rows.get(bucket_time)  # 读取当前时间桶的聚合天气结果。
+            has_data = payload is not None and int(payload.get("reading_count") or 0) > 0  # 判断当前时间桶是否有真实天气观测值。
+            if has_data:  # 如果当前时间桶有真实数据，
+                has_series_data = True  # 就把序列命中标记设为真。
+            points.append(  # 把当前时间桶点位追加到点位列表。
+                BuildingWeatherPoint(  # 创建当前时间桶天气点位对象。
+                    timestamp=require_api_datetime(bucket_time),  # 把时间桶时间转换成UTC+8标准时间。
+                    air_temperature=round_optional_float(payload.get("air_temperature")) if payload else None,  # 写入当前时间桶气温聚合值。
+                    dew_temperature=round_optional_float(payload.get("dew_temperature")) if payload else None,  # 写入当前时间桶露点温度聚合值。
+                    wind_speed=round_optional_float(payload.get("wind_speed")) if payload else None,  # 写入当前时间桶风速聚合值。
+                    data_status=resolve_numeric_data_status(has_data=has_data),  # 写入当前时间桶数据状态。
+                    data_note=None if has_data else "当前时间桶未命中天气观测数据。",  # 对缺失点补充说明文本。
+                )  # 完成当前时间桶点位对象创建。
+            )  # 完成当前点位追加。
+        series.append(  # 把当前建筑天气序列追加到响应列表。
+            BuildingWeatherSeries(  # 创建当前建筑天气序列对象。
+                building_id=building_id,  # 写入建筑编号字段。
+                site_id=site_id,  # 写入站点编号字段。
+                points=points,  # 写入天气点位列表字段。
+                data_status=resolve_numeric_data_status(has_data=has_series_data),  # 写入当前序列数据状态。
+                data_note=None if has_series_data else "当前建筑在所选时间范围内没有命中天气数据。",  # 在整段缺失时补充说明。
+            )  # 完成当前建筑序列对象创建。
+        )  # 完成当前建筑序列追加。
+    return BuildingWeatherQueryResponse(  # 构造并返回建筑天气查询响应。
+        time_range=build_api_time_range(resolved_start, resolved_end),  # 写入带UTC+8时区的时间范围字段。
+        granularity=normalized_granularity,  # 写入标准化后的时间粒度字段。
+        series=series,  # 写入建筑天气序列列表字段。
+        missing_building_ids=missing_building_ids,  # 写入未匹配建筑列表字段。
+    )  # 完成建筑天气查询响应构造。
