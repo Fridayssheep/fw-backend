@@ -132,7 +132,8 @@ def to_db_datetime(value: datetime | str | None) -> datetime | None:  # 定义�
     return value.astimezone(APP_TZ).replace(tzinfo=None)  # 如果传入的是带时区时间，就先转成UTC+8时间再去掉时区后查询数据库。
 
 
-def to_api_datetime(value: datetime | None) -> datetime | None:  # 定义把数据库时间转换成接口输出时间的函数。
+def to_api_datetime(value: datetime | str | None) -> datetime | None:  # 定义把数据库时间转换成接口输出时间的函数。
+    value = parse_datetime_input(value)  # 先兼容数据库或驱动返回的字符串时间。
     if value is None:  # 如果当前时间为空，
         return None  # 就直接返回空。
     if value.tzinfo is None:  # 如果数据库返回的是无时区时间，
@@ -140,14 +141,14 @@ def to_api_datetime(value: datetime | None) -> datetime | None:  # 定义把数�
     return value.astimezone(APP_TZ)  # 如果已经带时区，就统一转成UTC+8标准时间。
 
 
-def require_api_datetime(value: datetime) -> datetime:  # 定义把必定存在的数据库时间转换成接口输出时间的函数。
+def require_api_datetime(value: datetime | str) -> datetime:  # 定义把必定存在的数据库时间转换成接口输出时间的函数。
     converted_value = to_api_datetime(value)  # 先复用通用转换函数把时间转成UTC+8标准时间。
     if converted_value is None:  # 如果理论上必填的时间却变成了空值，
         raise ValueError("时间字段不能为空")  # 就直接抛错，避免静默返回非法数据。
     return converted_value  # 返回已经确认非空的UTC+8标准时间。
 
 
-def build_api_time_range(start_time: datetime, end_time: datetime) -> TimeRange:  # 定义构造带时区时间范围对象的函数。
+def build_api_time_range(start_time: datetime | str, end_time: datetime | str) -> TimeRange:  # 定义构造带时区时间范围对象的函数。
     return TimeRange(  # 返回时间范围对象。
         start=require_api_datetime(start_time),  # 把开始时间转成UTC+8标准时间。
         end=require_api_datetime(end_time),  # 把结束时间转成UTC+8标准时间。
@@ -367,6 +368,5 @@ def normalize_pagination(  # 定义标准化分页参数的函数。
     safe_page_size = max(1, min(page_size, max_page_size))  # 防止 page_size 传成非法值或过大值。
     offset = (safe_page - 1) * safe_page_size  # 按标准分页公式计算偏移量。
     return safe_page, safe_page_size, offset  # 返回完整分页结果。
-
 
 

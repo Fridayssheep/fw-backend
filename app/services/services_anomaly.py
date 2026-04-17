@@ -25,6 +25,7 @@ from .service_common import (
     normalize_meter,
     normalize_pagination,
     require_api_datetime,
+    resolve_time_range,
 )
 
 
@@ -219,15 +220,12 @@ def list_energy_anomalies(
     page: int = 1,
     page_size: int = 20,
 ) -> EnergyAnomalyListResponse:
-    resolved_end = require_api_datetime(
-        end_time if end_time is not None else get_latest_timestamp(
-            [building_id] if building_id else None,
-            site_id,
-            meter,
-        )
-    )
-    resolved_start = require_api_datetime(
-        start_time if start_time is not None else (resolved_end - timedelta(days=7))
+    resolved_start, resolved_end = resolve_time_range(
+        start_time,
+        end_time,
+        [building_id] if building_id else None,
+        site_id,
+        meter,
     )
     safe_page, safe_page_size, offset = normalize_pagination(page, page_size, max_page_size=200)
 
