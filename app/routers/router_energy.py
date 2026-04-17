@@ -10,12 +10,14 @@ from app.schemas.schemas_energy import BuildingWeatherQueryResponse  # 导入建
 from app.schemas.schemas_energy import CopAnalysisResponse  # 导入 COP 响应模型。
 from app.schemas.schemas_energy import EnergyAnomalyAnalysisRequest  # 导入异常分析请求模型。
 from app.schemas.schemas_energy import EnergyAnomalyAnalysisResponse  # 导入异常分析响应模型。
+from app.schemas.schemas_energy import EnergyAnomalyListResponse
 from app.schemas.schemas_energy import EnergyCompareResponse  # 导入能耗对比响应模型。
 from app.schemas.schemas_energy import EnergyQueryResponse  # 导入能耗明细响应模型。
 from app.schemas.schemas_energy import EnergyRankingResponse  # 导入能耗排行响应模型。
 from app.schemas.schemas_energy import EnergyTrendResponse  # 导入能耗趋势响应模型。
 from app.schemas.schemas_energy import WeatherCorrelationResponse  # 导入天气相关性响应模型。
 from app.services.services_anomaly import get_energy_anomaly_analysis as get_energy_anomaly_analysis_service  # 导入异常分析业务函数。
+from app.services.services_anomaly import list_energy_anomalies as list_energy_anomalies_service
 from app.services.services_energy import get_energy_compare as get_energy_compare_service  # 导入能耗对比业务函数。
 from app.services.services_energy import get_energy_cop as get_energy_cop_service  # 导入 COP 业务函数。
 from app.services.services_energy import get_energy_query as get_energy_query_service  # 导入能耗明细业务函数。
@@ -124,6 +126,29 @@ def get_building_weather_api(  # 定义建筑天气查询处理函数。
 ) -> BuildingWeatherQueryResponse:  # 返回建筑天气查询响应模型。
     parsed_building_ids = parse_building_ids(request) or building_ids  # 优先按统一规则解析 building_ids，并兼容 FastAPI 原生 list 参数。
     return get_energy_weather_service(parsed_building_ids, start_time, end_time, granularity)  # 调用业务层并返回结果。
+
+
+@router.get("/energy/anomalies", response_model=EnergyAnomalyListResponse, summary="获取故障分析页异常事件列表")
+def list_energy_anomalies_api(
+    site_id: Annotated[str | None, Query()] = None,
+    building_id: Annotated[str | None, Query()] = None,
+    meter: Annotated[str | None, Query()] = None,
+    severity: Annotated[str | None, Query(description="按严重级别筛选，可传 high/medium/low")] = None,
+    start_time: Annotated[str | None, Query()] = None,
+    end_time: Annotated[str | None, Query()] = None,
+    page: Annotated[PageQueryInt, Query()] = 1,
+    page_size: Annotated[PageSizeQueryInt, Query()] = 20,
+) -> EnergyAnomalyListResponse:
+    return list_energy_anomalies_service(
+        start_time=start_time,
+        end_time=end_time,
+        site_id=site_id,
+        building_id=building_id,
+        meter=meter,
+        severity=severity,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post("/energy/anomaly-analysis", response_model=EnergyAnomalyAnalysisResponse, summary="建筑能耗异常分析")  # 注册能耗异常分析接口。

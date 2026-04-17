@@ -6,6 +6,7 @@ from pydantic import BaseModel  # 导入 BaseModel，用于声明 Pydantic 数�
 from pydantic import ConfigDict  # 导入 ConfigDict，用于配置模型额外字段策略。
 from pydantic import Field  # 导入 Field，用于声明字段默认值与校验约束。
 
+from .schemas_common import Pagination  # 导入统一分页模型。
 from .schemas_common import TimeRange  # 导入统一时间范围模型。
 
 
@@ -75,6 +76,27 @@ class ReportDetailResponse(BaseModel):  # 定义报表详情响应模型。
     sections: list[ReportSection] = Field(default_factory=list)  # 报表分节列表。
     exports: list[ReportExport] = Field(default_factory=list)  # 可用导出格式列表。
     error_message: str | None = None  # 失败时错误信息。
+
+
+class ReportListItem(BaseModel):
+    report_id: str = Field(..., description="报表 ID")
+    report_type: str = Field(..., description="报表类型")
+    status: str = Field(..., description="报表状态")
+    time_range: TimeRange = Field(..., description="报表时间范围")
+    building_id: str | None = Field(default=None, description="建筑编号")
+    summary: str | None = Field(default=None, description="报表摘要文本")
+    download_url: str | None = Field(default=None, description="默认下载链接")
+    generated_at: datetime | None = Field(default=None, description="报表生成时间")
+    include_ai_summary: bool = Field(default=False, description="是否请求 AI 参与报表生成")
+    ai_summary_applied: bool = Field(default=False, description="AI 总结是否实际执行")
+    ai_summary_skipped_reason: str | None = Field(default=None, description="AI 总结未执行时的跳过原因")
+    error_message: str | None = Field(default=None, description="失败时错误信息")
+
+
+class ReportListResponse(BaseModel):
+    items: list[ReportListItem] = Field(default_factory=list, description="报表列表")
+    pagination: Pagination = Field(..., description="分页信息")
+
 
 class DeleteReportResponse(BaseModel):
     report_id: str = Field(..., description="被删除的报表 ID")

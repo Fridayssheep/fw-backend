@@ -23,6 +23,31 @@ DB_NAME = os.getenv("DB_NAME", "building_energy")
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip() or f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 engine = create_engine(DATABASE_URL)
 
+
+def classify_missing_data_severity(gap_hours):
+    """断流缺失按持续时长分级，避免所有缺失都落成 HIGH。"""
+    hours = float(gap_hours or 0)
+    if hours >= 24:
+        return 'HIGH'
+    if hours >= 8:
+        return 'MEDIUM'
+    return 'LOW'
+
+
+def classify_zscore_severity(z_score):
+    """突发异常按偏离程度分级，和 API 读取侧保持一致。"""
+    score = float(z_score or 0)
+    if score >= 6:
+        return 'HIGH'
+    if score >= 4:
+        return 'MEDIUM'
+    return 'LOW'
+
+
+def classify_isolation_forest_severity():
+    """上下文离群暂按低级处理，避免隐性异常默认偏重。"""
+    return 'LOW'
+
 def get_target_tasks(limit=None):
     """
     获取要跑批的建筑和表计组合，以及它们在 anomaly_events 表中的最新分析时间(水线)。
@@ -98,7 +123,7 @@ def detect_anomalies_for_series(building_id, meter, last_analyzed_time):
                 'building_id': building_id, 'site_id': None, 'meter': meter,
                 'start_time': prev_time, 'end_time': row['timestamp'],
                 'peak_deviation': float(row['time_diff']),
-                'severity': 'HIGH',
+                'severity': classify_missing_data_severity(row['time_diff']),
                 'detected_by': 'missing_data_detector',
                 'description': f"表计断流/数据缺失长达 {row['time_diff']:.1f} 小时"
             })
@@ -120,7 +145,7 @@ def detect_anomalies_for_series(building_id, meter, last_analyzed_time):
                     'building_id': building_id, 'site_id': None, 'meter': meter,
                     'start_time': row['timestamp'], 'end_time': row['timestamp'],
                     'peak_deviation': float(row['z_score']),
-                    'severity': 'HIGH' if row['z_score'] > 5.0 else 'MEDIUM',
+                    'severity': classify_zscore_severity(row['z_score']),
                     'detected_by': 'z_score_detector',
                     'description': f"发生突发性数值读数异常，Z-Score偏离度高达 {row['z_score']:.2f}"
                 })
@@ -151,7 +176,7 @@ def detect_anomalies_for_series(building_id, meter, last_analyzed_time):
                 'building_id': building_id, 'site_id': None, 'meter': meter,
                 'start_time': row['timestamp'], 'end_time': row['timestamp'],
                 'peak_deviation': None, # 孤立森林的分数比较难直接对标量化，这里存 None
-                'severity': 'MEDIUM',
+                'severity': classify_isolation_forest_severity(),
                 'detected_by': 'isolation_forest',
                 'description': f"周期性特征离群异常，读数 {row['meter_reading']:.2f} 不符合该时间段({row['hour']}点, 星期{row['day_of_week']})的历史规律"
             })

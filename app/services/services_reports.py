@@ -23,8 +23,11 @@ from app.schemas.schemas_reports import GenerateReportRequest  # 导入创建报
 from app.schemas.schemas_reports import GenerateReportResponse  # 导入创建报表响应模型。
 from app.schemas.schemas_reports import ReportDetailResponse  # 导入报表详情响应模型。
 from app.schemas.schemas_reports import ReportExport  # 导入报表导出描述模型。
+from app.schemas.schemas_reports import ReportListItem
+from app.schemas.schemas_reports import ReportListResponse
 from app.schemas.schemas_reports import ReportSection  # 导入报表分节模型。
 from app.schemas.schemas_reports import ReportStatus  # 导入报表状态枚举。
+from app.schemas.schemas_common import Pagination
 from .service_common import ResourceNotFoundError  # 导入统一 404 异常类型。
 from .service_common import build_api_time_range  # 导入时间范围标准化函数。
 from .service_common import normalize_meter  # 导入表计标准化函数。
@@ -1055,6 +1058,97 @@ def get_report_detail(report_id: str, base_url: str | None = None) -> ReportDeta
         exports=export_items,  # 写入导出描述列表。
         error_message=row.get("error_message"),  # 写入错误信息（可空）。
     )  # 完成报表详情响应构造。
+
+
+def list_reports(
+    *,
+    base_url: str | None = None,
+    report_type: str | None = None,
+    status: str | None = None,
+    building_id: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> ReportListResponse:
+    where_clauses = ["1=1"]
+    params: dict[str, Any] = {
+        "limit": page_size,
+        "offset": (page - 1) * page_size,
+    }
+
+    if report_type and str(report_type).strip():
+        where_clauses.append("report_type = :report_type")
+        params["report_type"] = str(report_type).strip()
+    if status and str(status).strip():
+        where_clauses.append("status = :status")
+        params["status"] = str(status).strip()
+    if building_id and str(building_id).strip():
+        where_clauses.append("building_id = :building_id")
+        params["building_id"] = str(building_id).strip()
+
+    where_sql = " AND ".join(where_clauses)
+    rows = fetch_all(
+        f"""
+        SELECT
+            report_id,
+            report_type,
+            status,
+            building_id,
+            include_ai_summary,
+            summary,
+            report_json,
+            error_message,
+            created_at,
+            time_start,
+            time_end
+        FROM reports
+        WHERE {where_sql}
+        ORDER BY created_at DESC, report_id DESC
+        LIMIT :limit OFFSET :offset
+        """,
+        params,
+    )
+    count_row = fetch_one(
+        f"""
+        SELECT COUNT(*) AS total
+        FROM reports
+        WHERE {where_sql}
+        """,
+        {key: value for key, value in params.items() if key not in {"limit", "offset"}},
+    ) or {"total": 0}
+    total = int(count_row.get("total") or 0)
+
+    items: list[ReportListItem] = []
+    for row in rows:
+        report_json = _coerce_report_json(row.get("report_json"))
+        start_time = to_api_datetime(row.get("time_start"))
+        end_time = to_api_datetime(row.get("time_end"))
+        if start_time is None:
+            start_time = _to_optional_datetime((report_json.get("time_range") or {}).get("start"))
+        if end_time is None:
+            end_time = _to_optional_datetime((report_json.get("time_range") or {}).get("end"))
+        if start_time is None or end_time is None:
+            continue
+        items.append(
+            ReportListItem(
+                report_id=str(row["report_id"]),
+                report_type=str(row["report_type"]),
+                status=str(row["status"]),
+                time_range=TimeRange(start=start_time, end=end_time),
+                building_id=row.get("building_id"),
+                summary=row.get("summary") or report_json.get("summary"),
+                download_url=_build_download_url(str(row["report_id"]), base_url),
+                generated_at=to_api_datetime(row.get("created_at")),
+                include_ai_summary=bool(row.get("include_ai_summary")),
+                ai_summary_applied=bool(report_json.get("ai_summary_applied")),
+                ai_summary_skipped_reason=report_json.get("ai_summary_skipped_reason"),
+                error_message=row.get("error_message"),
+            )
+        )
+
+    return ReportListResponse(
+        items=items,
+        pagination=Pagination(page=page, page_size=page_size, total=total),
+    )
 
 
 def get_report_export(report_id: str, export_format: str) -> tuple[str, str, str]:  # 定义导出内容获取函数。

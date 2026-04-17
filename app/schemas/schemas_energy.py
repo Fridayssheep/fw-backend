@@ -169,6 +169,32 @@ class AnomalyDetectorBreakdownItem(BaseModel):
     count: int
 
 
+class EnergyAnomalyListItem(BaseModel):
+    anomaly_id: str
+    building_id: str
+    device_id: str | None = None
+    meter: str
+    severity: str
+    status: str
+    title: str
+    start_time: datetime
+    resolution_status: str | None = None
+
+
+class EnergyAnomalySeverityStats(BaseModel):
+    total: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+
+
+class EnergyAnomalyListResponse(BaseModel):
+    time_range: TimeRange
+    items: list[EnergyAnomalyListItem] = Field(default_factory=list)
+    pagination: Pagination
+    severity_stats: EnergyAnomalySeverityStats = Field(default_factory=EnergyAnomalySeverityStats)
+
+
 class EnergyAnomalyAnalysisRequest(BaseModel):
     building_id: str
     meter: str

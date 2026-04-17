@@ -77,6 +77,9 @@ from .schemas_energy import AnomalyDetectorBreakdownItem
 from .schemas_energy import DetectedAnomalyEvent
 from .schemas_energy import EnergyAnomalyAnalysisRequest
 from .schemas_energy import EnergyAnomalyAnalysisResponse
+from .schemas_energy import EnergyAnomalyListItem
+from .schemas_energy import EnergyAnomalyListResponse
+from .schemas_energy import EnergyAnomalySeverityStats
 from .schemas_energy import EnergyCompareItem
 from .schemas_energy import EnergyCompareResponse
 from .schemas_energy import EnergyPoint
@@ -109,6 +112,16 @@ from .schemas_meters import MeterDetailResponse
 from .schemas_meters import MeterListResponse
 from .schemas_meters import MeterStatus
 from .schemas_meters import MeterSummary
+from .schemas_reports import DeleteReportResponse
+from .schemas_reports import GenerateReportRequest
+from .schemas_reports import GenerateReportResponse
+from .schemas_reports import ReportDetailResponse
+from .schemas_reports import ReportExport
+from .schemas_reports import ReportListItem
+from .schemas_reports import ReportListResponse
+from .schemas_reports import ReportSection
+from .schemas_reports import ReportStatus
+from .schemas_reports import ReportType
 from .schemas_system import RuntimeAIFeatureSettings
 from .schemas_system import RuntimeAISettingsPayload
 from .schemas_system import RuntimeAISettingsResponse
@@ -200,6 +213,9 @@ __all__ = [
     "DeviceSummary",
     "EnergyAnomalyAnalysisRequest",
     "EnergyAnomalyAnalysisResponse",
+    "EnergyAnomalyListItem",
+    "EnergyAnomalyListResponse",
+    "EnergyAnomalySeverityStats",
     "EnergyCompareItem",
     "EnergyCompareResponse",
     "EnergyPoint",
@@ -228,6 +244,16 @@ __all__ = [
     "Pagination",
     "KnowledgeDocument",
     "KnowledgeDocumentListResponse",
+    "DeleteReportResponse",
+    "GenerateReportRequest",
+    "GenerateReportResponse",
+    "ReportDetailResponse",
+    "ReportExport",
+    "ReportListItem",
+    "ReportListResponse",
+    "ReportSection",
+    "ReportStatus",
+    "ReportType",
     "SelectedCauseSummary",
     "RuntimeAIFeatureSettings",
     "RuntimeAISettingsPayload",
