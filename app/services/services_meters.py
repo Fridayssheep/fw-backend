@@ -5,6 +5,7 @@ from typing import Any
 from .services_anomaly import build_meter_alarm_items, get_meter_alarms
 from app.core.database import fetch_all
 from app.core.database import fetch_one
+from app.core.database import fetch_scalar
 from app.schemas.schemas_common import MetricCard
 from app.schemas.schemas_common import Pagination
 from app.schemas.schemas_meters import MaintenanceRecord
