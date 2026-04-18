@@ -167,7 +167,16 @@ def get_buildings(  # 定义建筑列表查询接口业务函数。
         ),
         final_buildings AS (
             SELECT
-                bm.*,
+                bm.building_id,
+                bm.site_id,
+                bm.primaryspaceusage,
+                bm.sub_primaryspaceusage,
+                bm.sqm,
+                bm.lat,
+                bm.lng,
+                bm.timezone,
+                bm.yearbuilt,
+                bm.leed_level,
                 COALESCE(ae.total_energy, 0) as energy,
                 COALESCE(ae.total_carbon, 0) as carbon,
                 CASE WHEN bm.sqm > 0 THEN COALESCE(ae.total_energy, 0) / bm.sqm ELSE 0 END as eui,
