@@ -4,6 +4,7 @@ from collections import defaultdict  # 导入默认字典，方便做多表计�
 import json  # 导入 JSON 库，用于报表内容序列化与反序列化。
 import uuid  # 导入 UUID 库，用于生成报表 ID。
 from datetime import datetime  # 导入日期时间类型，用于时间字段处理。
+from threading import Thread  # 导入轻量线程，用于非 FastAPI 调用场景下继续后台生成。
 from typing import Any  # 导入任意类型注解，方便描述动态结构。
 
 from ai.backend.report_summary_service import get_report_summary  # 导入 AI 报表总结服务。
@@ -654,7 +655,13 @@ def _persist_report(  # 定义报表持久化函数。
         )
         ON CONFLICT (report_id) DO UPDATE
         SET
+            report_type = EXCLUDED.report_type,
             status = EXCLUDED.status,
+            building_id = EXCLUDED.building_id,
+            meter = EXCLUDED.meter,
+            time_start = EXCLUDED.time_start,
+            time_end = EXCLUDED.time_end,
+            include_ai_summary = EXCLUDED.include_ai_summary,
             summary = EXCLUDED.summary,
             report_json = EXCLUDED.report_json,
             export_markdown = EXCLUDED.export_markdown,
@@ -678,8 +685,55 @@ def _persist_report(  # 定义报表持久化函数。
     )  # 完成持久化写入。
 
 
-def generate_report(payload: GenerateReportRequest, base_url: str | None = None) -> GenerateReportResponse:  # 定义生成报表主函数。
+def generate_report(  # 定义创建报表生成任务的入口函数。
+    payload: GenerateReportRequest,  # 接收报表生成请求。
+    base_url: str | None = None,  # 接收服务基础 URL，用于生成下载链接。
+    background_tasks: Any | None = None,  # 接收 FastAPI BackgroundTasks；为空时退回线程执行。
+) -> GenerateReportResponse:
     report_id = _build_report_id()  # 先生成本次报表 ID。
+    fallback_meter = normalize_meter(DEFAULT_REPORT_METER)  # 准备占位记录使用的默认表计。
+    queued_payload = {  # 先构造处理中状态的报表 JSON，保证列表接口可以立即查到。
+        "report_id": report_id,
+        "report_type": payload.report_type.value,
+        "status": ReportStatus.processing.value,
+        "time_range": payload.time_range.model_dump(mode="json"),
+        "building_id": payload.building_id,
+        "meter": fallback_meter,
+        "analyzed_meters": [fallback_meter],
+        "summary": "报表正在生成中，请稍后刷新查看。",
+        "generated_at": require_api_datetime(datetime.now()).isoformat(),
+        "include_ai_summary": payload.include_ai_summary,
+        "ai_summary_applied": False,
+        "ai_summary_skipped_reason": None if payload.include_ai_summary else "not_requested",
+        "ai_insight": None,
+        "sections": [],
+        "exports": [],
+        "download_url": None,
+    }
+    _persist_report(  # 先持久化 processing 状态，避免前端等待长任务且列表查不到。
+        report_id=report_id,
+        payload=payload,
+        meter=fallback_meter,
+        report_time_range=payload.time_range,
+        status=ReportStatus.processing,
+        summary_text="报表正在生成中，请稍后刷新查看。",
+        report_payload=queued_payload,
+        export_markdown=None,
+    )
+    if background_tasks is not None:  # FastAPI 正常请求路径使用后台任务。
+        background_tasks.add_task(_generate_report_sync, report_id, payload, base_url)
+    else:  # 非请求上下文调用时也不要阻塞调用方。
+        Thread(target=_generate_report_sync, args=(report_id, payload, base_url), daemon=True).start()
+    return GenerateReportResponse(
+        report_id=report_id,
+        status=ReportStatus.processing,
+        include_ai_summary=payload.include_ai_summary,
+        ai_summary_applied=False,
+        ai_summary_skipped_reason=None if payload.include_ai_summary else "not_requested",
+    )
+
+
+def _generate_report_sync(report_id: str, payload: GenerateReportRequest, base_url: str | None = None) -> GenerateReportResponse:  # 定义同步执行报表生成的后台任务函数。
     fallback_meter = normalize_meter(DEFAULT_REPORT_METER)  # 先定义默认回退表计，避免异常分支丢失上下文。
     display_meter = fallback_meter  # 初始化对外展示表计字段。
     analyzed_meters: list[str] = [fallback_meter]  # 初始化参与分析的表计列表。
