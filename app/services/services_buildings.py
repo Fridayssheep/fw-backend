@@ -50,6 +50,9 @@ def map_building_row_to_model(row: dict[str, Any]) -> Building:  # 定义把建�
         energy=round_optional_float(row.get("energy")),
         eui=round_optional_float(row.get("eui")),
         carbon=round_optional_float(row.get("carbon")),
+        meter_count=int(row.get("meter_count") or 0),
+        status=normalize_text(row.get("status")),
+        status_text=normalize_text(row.get("status_text")),
     )  # 完成建筑模型构造。
 
 
@@ -85,6 +88,7 @@ def get_buildings(  # 定义建筑列表查询接口业务函数。
     max_eui: float | None,
     min_carbon: float | None,
     max_carbon: float | None,
+    status: str | None,
     start_time: str | None,
     end_time: str | None,
     page: int,
@@ -95,30 +99,70 @@ def get_buildings(  # 定义建筑列表查询接口业务函数。
     
     # 2. 构造基础过滤条件
     where_sql, params = build_building_filters(keyword, site_id, primaryspaceusage)
+    normalized_status = normalize_text(status)
+    if normalized_status:
+        normalized_status = normalized_status.lower()
+    if normalized_status not in {"normal", "warning", "fault", "offline"}:
+        normalized_status = None
     
     # 3. 准备 SQL 参数
     params.update({
-        "start_date": resolved_start.date(),
-        "end_date": resolved_end.date(),
+        "start_time": resolved_start,
+        "end_time": resolved_end,
         "min_energy": min_energy if min_energy is not None else None,
         "max_energy": max_energy if max_energy is not None else None,
         "min_eui": min_eui if min_eui is not None else None,
         "max_eui": max_eui if max_eui is not None else None,
         "min_carbon": min_carbon if min_carbon is not None else None,
         "max_carbon": max_carbon if max_carbon is not None else None,
+        "status": normalized_status,
     })
 
-    # 4. 编写带聚合筛选的 SQL (修正版：确保即使没有聚合数据也能显示建筑)
-    # 【修复重点】: 在外层查询中使用更严谨的 NULL 判断，防止前端传 0 或空字符串导致全军覆没
+    # 4. 编写带聚合筛选的 SQL。这里直接按请求时间窗读取明细表，避免依赖 dashboard 才会刷新的日聚合表。
     sql_base = f"""
         WITH aggregated_energy AS (
             SELECT 
+                mr.building_id,
+                SUM(mr.meter_reading) as total_energy,
+                SUM(mr.meter_reading) * {CARBON_FACTOR} as total_carbon
+            FROM meter_readings mr
+            WHERE mr.timestamp >= :start_time
+              AND mr.timestamp <= :end_time
+              AND mr.meter = 'electricity'
+            GROUP BY mr.building_id
+        ),
+        meter_status_source AS (
+            SELECT
+                mr.building_id AS building_id,
+                mr.meter AS meter_type,
+                MAX(mr.timestamp) AS last_seen_at
+            FROM meter_readings mr
+            WHERE mr.timestamp >= :start_time
+              AND mr.timestamp <= :end_time
+            GROUP BY mr.building_id, mr.meter
+        ),
+        meter_status AS (
+            SELECT
                 building_id,
-                SUM(reading_sum) as total_energy,
-                SUM(reading_sum) * {CARBON_FACTOR} as total_carbon
-            FROM meter_daily_agg
-            WHERE bucket_day >= :start_date AND bucket_day <= :end_date
-              AND meter = 'electricity'
+                meter_type,
+                CASE
+                    WHEN last_seen_at IS NULL THEN 'offline'
+                    WHEN :end_time - last_seen_at <= INTERVAL '2 days' THEN 'online'
+                    WHEN :end_time - last_seen_at <= INTERVAL '7 days' THEN 'warning'
+                    WHEN :end_time - last_seen_at <= INTERVAL '14 days' THEN 'fault'
+                    ELSE 'offline'
+                END AS computed_status
+            FROM meter_status_source
+        ),
+        building_status_rollup AS (
+            SELECT
+                building_id,
+                COUNT(*) AS meter_count,
+                BOOL_OR(computed_status = 'fault') AS has_fault,
+                BOOL_OR(computed_status = 'warning') AS has_warning,
+                BOOL_OR(computed_status = 'offline') AS has_offline,
+                BOOL_AND(computed_status = 'offline') AS all_offline
+            FROM meter_status
             GROUP BY building_id
         ),
         final_buildings AS (
@@ -126,9 +170,27 @@ def get_buildings(  # 定义建筑列表查询接口业务函数。
                 bm.*,
                 COALESCE(ae.total_energy, 0) as energy,
                 COALESCE(ae.total_carbon, 0) as carbon,
-                CASE WHEN bm.sqm > 0 THEN COALESCE(ae.total_energy, 0) / bm.sqm ELSE 0 END as eui
+                CASE WHEN bm.sqm > 0 THEN COALESCE(ae.total_energy, 0) / bm.sqm ELSE 0 END as eui,
+                COALESCE(bsr.meter_count, 0) AS meter_count,
+                CASE
+                    WHEN COALESCE(bsr.meter_count, 0) = 0 THEN 'offline'
+                    WHEN bsr.has_fault THEN 'fault'
+                    WHEN bsr.has_warning THEN 'warning'
+                    WHEN bsr.all_offline THEN 'offline'
+                    WHEN bsr.has_offline THEN 'warning'
+                    ELSE 'normal'
+                END AS status,
+                CASE
+                    WHEN COALESCE(bsr.meter_count, 0) = 0 THEN '时段无数据'
+                    WHEN bsr.has_fault THEN '故障停机'
+                    WHEN bsr.has_warning THEN '告警状态'
+                    WHEN bsr.all_offline THEN '离线'
+                    WHEN bsr.has_offline THEN '部分离线'
+                    ELSE '正常运行'
+                END AS status_text
             FROM building_metadata bm
             LEFT JOIN aggregated_energy ae ON bm.building_id = ae.building_id
+            LEFT JOIN building_status_rollup bsr ON bm.building_id = bsr.building_id
             WHERE {where_sql}
         )
         SELECT * FROM final_buildings
@@ -138,6 +200,7 @@ def get_buildings(  # 定义建筑列表查询接口业务函数。
           AND (:max_eui IS NULL OR eui <= :max_eui)
           AND (:min_carbon IS NULL OR carbon >= :min_carbon)
           AND (:max_carbon IS NULL OR carbon <= :max_carbon)
+          AND (:status IS NULL OR status = :status)
     """
 
     # 5. 执行分页与总数查询

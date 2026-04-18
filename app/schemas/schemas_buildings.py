@@ -25,6 +25,9 @@ class Building(BaseModel):
     energy: float | None = None
     eui: float | None = None
     carbon: float | None = None
+    meter_count: int | None = None
+    status: str | None = None
+    status_text: str | None = None
 
 
 class BuildingListResponse(BaseModel):

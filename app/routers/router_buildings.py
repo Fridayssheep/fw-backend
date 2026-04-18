@@ -31,6 +31,7 @@ def get_buildings_api(  # 定义建筑列表查询处理函数。
     max_eui: Annotated[float | None, Query()] = None,
     min_carbon: Annotated[float | None, Query()] = None,
     max_carbon: Annotated[float | None, Query()] = None,
+    status: Annotated[str | None, Query(description="建筑运行状态：normal/warning/fault/offline")] = None,
     start_time: Annotated[str | None, Query()] = None,
     end_time: Annotated[str | None, Query()] = None,
     # -----------------------------
@@ -47,6 +48,7 @@ def get_buildings_api(  # 定义建筑列表查询处理函数。
         max_eui=max_eui,
         min_carbon=min_carbon,
         max_carbon=max_carbon,
+        status=status,
         start_time=start_time,
         end_time=end_time,
         page=page, 
