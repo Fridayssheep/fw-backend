@@ -20,6 +20,7 @@ from .service_common import get_meter_unit
 from .service_common import normalize_pagination
 from .service_common import normalize_text
 from .service_common import require_api_datetime
+from .service_common import to_db_datetime
 from .service_common import to_api_datetime
 from .services_buildings import DEFAULT_WINDOW_DAYS
 from .services_buildings import get_meter_window_statistics
@@ -171,6 +172,8 @@ def get_meters(
     status: str | None,
     page: int,
     page_size: int,
+    start_time: datetime | str | None = None,
+    end_time: datetime | str | None = None,
 ) -> MeterListResponse:
     clauses: list[str] = ["1=1"]
     params: dict[str, Any] = {}
@@ -182,52 +185,86 @@ def get_meters(
     if normalized_meter_type:
         clauses.append("mr.meter = :meter_type")
         params["meter_type"] = normalized_meter_type
+    normalized_start = to_db_datetime(start_time)
+    normalized_end = to_db_datetime(end_time)
+    if normalized_start is not None and normalized_end is not None and normalized_end < normalized_start:
+        raise ValueError("start_time 不能晚于 end_time。")
+    if normalized_start is not None:
+        clauses.append("mr.timestamp >= :start_time")
+        params["start_time"] = normalized_start
+    if normalized_end is not None:
+        clauses.append("mr.timestamp <= :end_time")
+        params["end_time"] = normalized_end
 
     safe_page, safe_page_size, offset = normalize_pagination(page, page_size)
 
-    # 1. 先查询符合条件的唯一表计总数（按建筑+表计类型去重）
-    total_count = fetch_scalar(
-        f"""
-        SELECT COUNT(*)
-        FROM (
-            SELECT building_id, meter
+    reference_latest = normalized_end or get_latest_timestamp(
+        [normalized_building_id] if normalized_building_id else None,
+        None,
+        normalized_meter_type,
+    )
+    normalized_status = normalize_text(status)
+    query_params = {
+        **params,
+        "reference_latest": reference_latest,
+        "limit": safe_page_size,
+        "offset": offset,
+    }
+    status_filter_sql = ""
+    if normalized_status:
+        query_params["status"] = normalized_status.lower()
+        status_filter_sql = "WHERE computed_status = :status"
+
+    grouped_sql = f"""
+        WITH grouped_meters AS (
+            SELECT
+                mr.building_id AS building_id,
+                mr.meter AS meter_type,
+                MAX(mr.timestamp) AS last_seen_at
             FROM meter_readings mr
             WHERE {' AND '.join(clauses)}
-            GROUP BY 1, 2
-        ) AS unique_meters
+            GROUP BY mr.building_id, mr.meter
+        ),
+        meter_status AS (
+            SELECT
+                building_id,
+                meter_type,
+                last_seen_at,
+                CASE
+                    WHEN last_seen_at IS NULL THEN 'offline'
+                    WHEN :reference_latest - last_seen_at <= INTERVAL '2 days' THEN 'online'
+                    WHEN :reference_latest - last_seen_at <= INTERVAL '7 days' THEN 'warning'
+                    WHEN :reference_latest - last_seen_at <= INTERVAL '14 days' THEN 'fault'
+                    ELSE 'offline'
+                END AS computed_status
+            FROM grouped_meters
+        )
+    """
+    total_count = fetch_scalar(
+        f"""
+        {grouped_sql}
+        SELECT COUNT(*)
+        FROM meter_status
+        {status_filter_sql}
         """,
-        params,
-    ) or 0
-
-    # 2. 分页查询表计列表及其最新活跃时间
+        query_params,
+    )
     rows = fetch_all(
         f"""
-        SELECT
-            mr.building_id AS building_id,
-            mr.meter AS meter_type,
-            MAX(mr.timestamp) AS last_seen_at
-        FROM meter_readings mr
-        WHERE {' AND '.join(clauses)}
-        GROUP BY mr.building_id, mr.meter
-        ORDER BY mr.building_id ASC, mr.meter ASC
+        {grouped_sql}
+        SELECT building_id, meter_type, last_seen_at
+        FROM meter_status
+        {status_filter_sql}
+        ORDER BY building_id ASC, meter_type ASC
         LIMIT :limit OFFSET :offset
         """,
-        {**params, "limit": safe_page_size, "offset": offset},
+        query_params,
     )
-
-    reference_latest = get_latest_timestamp()
-    items = [map_meter_row_to_model(row, reference_latest) for row in rows]
-
-    # 注意：这里的 status 过滤由于是计算出来的，目前暂不支持在 SQL 层直接过滤，
-    # 暂时保持在内存中过滤，但由于已经有了 LIMIT 分页，性能风险已大大降低。
-    # 如果未来需要高性能状态过滤，建议在表里增加 status 冗余字段或物化视图。
-    normalized_status = normalize_text(status)
-    if normalized_status:
-        items = [item for item in items if item.status.value.lower() == normalized_status.lower()]
+    paged_items = [map_meter_row_to_model(row, reference_latest) for row in rows]
 
     return MeterListResponse(
-        items=items,
-        pagination=Pagination(page=safe_page, page_size=safe_page_size, total=int(total_count)),
+        items=paged_items,
+        pagination=Pagination(page=safe_page, page_size=safe_page_size, total=int(total_count or 0)),
     )
 
 

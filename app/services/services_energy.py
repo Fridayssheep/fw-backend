@@ -519,13 +519,18 @@ def resolve_cop_building_id(building_id: str | None) -> str:  # 定义解析 COP
         return str(building_row["building_id"])  # 返回已经确认存在的建筑编号。
     default_row = fetch_one(  # 如果前端没有传建筑，就优先找一栋同时拥有 electricity 和 chilledwater 的建筑。
         """
-        SELECT
-            mr.building_id AS building_id
-        FROM meter_readings mr
-        WHERE mr.meter IN ('electricity', 'chilledwater')
-        GROUP BY mr.building_id
-        HAVING COUNT(DISTINCT mr.meter) = 2
-        ORDER BY COUNT(*) DESC, mr.building_id ASC
+        SELECT e.building_id AS building_id
+        FROM (
+            SELECT DISTINCT building_id
+            FROM meter_readings
+            WHERE meter = 'electricity'
+        ) e
+        INNER JOIN (
+            SELECT DISTINCT building_id
+            FROM meter_readings
+            WHERE meter = 'chilledwater'
+        ) c ON c.building_id = e.building_id
+        ORDER BY e.building_id ASC
         LIMIT 1
         """,
     )  # 执行默认建筑选择查询。
