@@ -28,11 +28,13 @@ def get_meters_api(  # 定义表计列表查询处理函数。
     building_id: Annotated[str | None, Query(description="建筑 ID")] = None,  # 声明 building_id 查询参数。
     meter_type: Annotated[str | None, Query(description="表计类型")] = None,  # 声明 meter_type 查询参数。
     status: Annotated[MeterStatus | None, Query(description="表计状态")] = None,  # 声明表计状态查询参数。
+    start_time: Annotated[str | None, Query(description="统计开始时间，传入后表计列表按该时间窗筛选")] = None,  # 声明统计开始时间。
+    end_time: Annotated[str | None, Query(description="统计结束时间，传入后表计状态以该时间为截止点计算")] = None,  # 声明统计结束时间。
     page: Annotated[PageQueryInt, Query(ge=1, description="页码")] = 1,  # 声明页码参数并限制最小值，同时兼容空字符串。
     page_size: Annotated[PageSizeQueryInt, Query(ge=1, le=100, description="每页条数")] = 20,  # 声明每页条数参数并限制范围，同时兼容空字符串。
 ) -> MeterListResponse:  # 返回表计列表响应模型。
     normalized_status = status.value if status is not None else None  # 把状态枚举转换成业务层使用的字符串。
-    return get_meters_service(building_id, meter_type, normalized_status, page, page_size)  # 调用业务层并返回结果。
+    return get_meters_service(building_id, meter_type, normalized_status, page, page_size, start_time, end_time)  # 调用业务层并返回结果。
 
 
 @router.get("/meters/{meterId}", response_model=MeterDetailResponse, summary="获取表计详情", operation_id="getMeterById", responses={404: {"model": ErrorResponse}})  # 注册表计详情查询接口。

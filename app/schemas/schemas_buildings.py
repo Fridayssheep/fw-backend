@@ -21,6 +21,13 @@ class Building(BaseModel):
     timezone: str | None = None
     yearbuilt: int | None = None
     leed_level: str | None = None
+    # 动态计算字段（用于搜索结果展示）
+    energy: float | None = None
+    eui: float | None = None
+    carbon: float | None = None
+    meter_count: int | None = None
+    status: str | None = None
+    status_text: str | None = None
 
 
 class BuildingListResponse(BaseModel):

@@ -1,5 +1,6 @@
 import os
 import time
+import threading
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine, text
@@ -21,6 +22,31 @@ DB_NAME = os.getenv("DB_NAME", "building_energy")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip() or f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 engine = create_engine(DATABASE_URL)
+
+
+def classify_missing_data_severity(gap_hours):
+    """断流缺失按持续时长分级，避免所有缺失都落成 HIGH。"""
+    hours = float(gap_hours or 0)
+    if hours >= 24:
+        return 'HIGH'
+    if hours >= 8:
+        return 'MEDIUM'
+    return 'LOW'
+
+
+def classify_zscore_severity(z_score):
+    """突发异常按偏离程度分级，和 API 读取侧保持一致。"""
+    score = float(z_score or 0)
+    if score >= 6:
+        return 'HIGH'
+    if score >= 4:
+        return 'MEDIUM'
+    return 'LOW'
+
+
+def classify_isolation_forest_severity():
+    """上下文离群暂按低级处理，避免隐性异常默认偏重。"""
+    return 'LOW'
 
 def get_target_tasks(limit=None):
     """
@@ -97,7 +123,7 @@ def detect_anomalies_for_series(building_id, meter, last_analyzed_time):
                 'building_id': building_id, 'site_id': None, 'meter': meter,
                 'start_time': prev_time, 'end_time': row['timestamp'],
                 'peak_deviation': float(row['time_diff']),
-                'severity': 'HIGH',
+                'severity': classify_missing_data_severity(row['time_diff']),
                 'detected_by': 'missing_data_detector',
                 'description': f"表计断流/数据缺失长达 {row['time_diff']:.1f} 小时"
             })
@@ -119,7 +145,7 @@ def detect_anomalies_for_series(building_id, meter, last_analyzed_time):
                     'building_id': building_id, 'site_id': None, 'meter': meter,
                     'start_time': row['timestamp'], 'end_time': row['timestamp'],
                     'peak_deviation': float(row['z_score']),
-                    'severity': 'HIGH' if row['z_score'] > 5.0 else 'MEDIUM',
+                    'severity': classify_zscore_severity(row['z_score']),
                     'detected_by': 'z_score_detector',
                     'description': f"发生突发性数值读数异常，Z-Score偏离度高达 {row['z_score']:.2f}"
                 })
@@ -150,7 +176,7 @@ def detect_anomalies_for_series(building_id, meter, last_analyzed_time):
                 'building_id': building_id, 'site_id': None, 'meter': meter,
                 'start_time': row['timestamp'], 'end_time': row['timestamp'],
                 'peak_deviation': None, # 孤立森林的分数比较难直接对标量化，这里存 None
-                'severity': 'MEDIUM',
+                'severity': classify_isolation_forest_severity(),
                 'detected_by': 'isolation_forest',
                 'description': f"周期性特征离群异常，读数 {row['meter_reading']:.2f} 不符合该时间段({row['hour']}点, 星期{row['day_of_week']})的历史规律"
             })
@@ -166,27 +192,51 @@ def detect_anomalies_for_series(building_id, meter, last_analyzed_time):
         
     return events_to_insert
 
+# 管道运行锁：防止多次触发产生多个并行管道
+_pipeline_lock = threading.Lock()
+_pipeline_running = False
+
+
+def is_pipeline_running() -> bool:
+    """查询管道是否正在运行（供路由层调用）"""
+    return _pipeline_running
+
+
 def run_batch_pipeline():
-    print("====== 启动能耗数据历史跑批诊断管道 (Batch Pipeline) ======")
-    start_time = time.time()
-    
-    # 拿到所有的任务组合，全线上线时去掉 LIMIT
-    tasks = get_target_tasks(limit=None) 
-    
-    total_events = 0
-    total_tasks = len(tasks)
-    
-    for i, (building_id, meter, last_analyzed_time) in enumerate(tasks):
+    global _pipeline_running
+
+    # 如果已有管道在跑，直接跳过
+    if not _pipeline_lock.acquire(blocking=False):
+        msg = "检测管道已在运行中，跳过重复触发"
+        print(f"[{time.strftime('%H:%M:%S')}] {msg}")
         if broker:
-            broker.publish_sync(message=f"进度: {i+1}/{total_tasks}", event_type="anomaly_detect_progress")
-        events = detect_anomalies_for_series(building_id, meter, last_analyzed_time)
-        total_events += len(events)
-        
-    
-    final_msg = f"管道执行完毕，总计发现并记录了 {total_events} 条异常事件！(耗时 {time.time() - start_time:.2f}s)"
-    print("\n====== " + final_msg + " ======")
-    if broker:
-        broker.publish_sync(message=final_msg, event_type="anomaly_detect_complete")
+            broker.publish_sync(message=msg, event_type="anomaly_detect_progress")
+        return
+
+    try:
+        _pipeline_running = True
+        print("====== 启动能耗数据历史跑批诊断管道 (Batch Pipeline) ======")
+        start_time_ts = time.time()
+
+        # 拿到所有的任务组合，全线上线时去掉 LIMIT
+        tasks = get_target_tasks(limit=None)
+
+        total_events = 0
+        total_tasks = len(tasks)
+
+        for i, (building_id, meter, last_analyzed_time) in enumerate(tasks):
+            if broker:
+                broker.publish_sync(message=f"进度: {i+1}/{total_tasks}", event_type="anomaly_detect_progress")
+            events = detect_anomalies_for_series(building_id, meter, last_analyzed_time)
+            total_events += len(events)
+
+        final_msg = f"管道执行完毕，总计发现并记录了 {total_events} 条异常事件！(耗时 {time.time() - start_time_ts:.2f}s)"
+        print("\n====== " + final_msg + " ======")
+        if broker:
+            broker.publish_sync(message=final_msg, event_type="anomaly_detect_complete")
+    finally:
+        _pipeline_running = False
+        _pipeline_lock.release()
 
 if __name__ == "__main__":
     run_batch_pipeline()

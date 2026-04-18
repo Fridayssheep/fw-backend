@@ -1,14 +1,19 @@
 import asyncio
+from typing import Annotated
 
 from fastapi import APIRouter
 from fastapi import HTTPException
+from fastapi import Query
 from fastapi import Request
 from fastapi.responses import StreamingResponse
+from pydantic import BeforeValidator
 
 from ai.backend.anomaly_service import analyze_anomaly_with_ai
 from ai.backend.feedback_service import submit_anomaly_feedback
 from ai.backend.ops_guide_service import get_ops_guide
 from ai.backend.qa_session_service import delete_session
+from ai.backend.qa_session_service import get_session_detail
+from ai.backend.qa_session_service import list_sessions
 from ai.backend.qa_service import ask_ai_question
 from ai.backend.query_assistant_service import build_query_intent
 from ai.backend.report_summary_service import get_report_summary
@@ -25,7 +30,9 @@ from app.schemas.schemas_ai import AIOpsGuideRequest
 from app.schemas.schemas_ai import AIOpsGuideResponse
 from app.schemas.schemas_ai import AIQARequest
 from app.schemas.schemas_ai import AIQAResponse
+from app.schemas.schemas_ai import AIQASessionDetailResponse
 from app.schemas.schemas_ai import AIQASessionDeleteResponse
+from app.schemas.schemas_ai import AIQASessionListResponse
 from app.schemas.schemas_ai import AIQueryAssistantRequest
 from app.schemas.schemas_ai import AIQueryAssistantResponse
 from app.schemas.schemas_ai import AIReportSummaryRequest
@@ -33,12 +40,15 @@ from app.schemas.schemas_ai import AIReportSummaryResponse
 from app.schemas.schemas_ai import AnomalyFeedbackRequest
 from app.schemas.schemas_ai import AnomalyFeedbackResponse
 from app.schemas.schemas_common import ErrorResponse
+from app.services.service_common import coerce_blank_to_default
 from app.services.service_common import ResourceNotFoundError
 
 from app.core.events import broker
 
 
 router = APIRouter(tags=["AI"])
+PageQueryInt = Annotated[int, BeforeValidator(coerce_blank_to_default(1))]
+PageSizeQueryInt = Annotated[int, BeforeValidator(coerce_blank_to_default(20))]
 
 @router.get("/ai/status", summary="旁路状态推流 (SSE)")
 async def ai_status_stream_api(request: Request):
@@ -47,7 +57,8 @@ async def ai_status_stream_api(request: Request):
     后端会在调用底层各种工具时自动向此流推送状态更新。
     """
     async def event_generator():
-        q = broker.add_client()
+        # 订阅 AI 工具调用事件 + AI 分析阶段状态事件
+        q = broker.add_client(topics={"mcp_tool", "ai_status"})
         try:
             while True:
                 if await request.is_disconnected():
@@ -191,6 +202,35 @@ def ask_ai_question_api(payload: AIQARequest) -> AIQAResponse:
         raise HTTPException(status_code=504, detail=str(exc)) from exc
     except (RagFlowUpstreamError, RagFlowInvalidResponseError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get(
+    "/ai/qa/sessions",
+    response_model=AIQASessionListResponse,
+    summary="获取 AI 历史会话列表",
+)
+def list_ai_qa_sessions_api(
+    page: Annotated[PageQueryInt, Query(ge=1, description="页码")] = 1,
+    page_size: Annotated[PageSizeQueryInt, Query(ge=1, le=100, description="每页条数")] = 20,
+) -> AIQASessionListResponse:
+    """按更新时间倒序获取 AI 历史会话列表。"""
+
+    return list_sessions(page=page, page_size=page_size)
+
+
+@router.get(
+    "/ai/qa/sessions/{sessionId}",
+    response_model=AIQASessionDetailResponse,
+    summary="获取单个 AI 会话详情",
+    responses={404: {"model": ErrorResponse}},
+)
+def get_ai_qa_session_detail_api(sessionId: str) -> AIQASessionDetailResponse:
+    """获取单个 AI 会话及其完整历史消息。"""
+
+    try:
+        return get_session_detail(sessionId)
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.delete(

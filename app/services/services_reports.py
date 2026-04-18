@@ -4,6 +4,7 @@ from collections import defaultdict  # 导入默认字典，方便做多表计�
 import json  # 导入 JSON 库，用于报表内容序列化与反序列化。
 import uuid  # 导入 UUID 库，用于生成报表 ID。
 from datetime import datetime  # 导入日期时间类型，用于时间字段处理。
+from threading import Thread  # 导入轻量线程，用于非 FastAPI 调用场景下继续后台生成。
 from typing import Any  # 导入任意类型注解，方便描述动态结构。
 
 from ai.backend.report_summary_service import get_report_summary  # 导入 AI 报表总结服务。
@@ -23,8 +24,11 @@ from app.schemas.schemas_reports import GenerateReportRequest  # 导入创建报
 from app.schemas.schemas_reports import GenerateReportResponse  # 导入创建报表响应模型。
 from app.schemas.schemas_reports import ReportDetailResponse  # 导入报表详情响应模型。
 from app.schemas.schemas_reports import ReportExport  # 导入报表导出描述模型。
+from app.schemas.schemas_reports import ReportListItem
+from app.schemas.schemas_reports import ReportListResponse
 from app.schemas.schemas_reports import ReportSection  # 导入报表分节模型。
 from app.schemas.schemas_reports import ReportStatus  # 导入报表状态枚举。
+from app.schemas.schemas_common import Pagination
 from .service_common import ResourceNotFoundError  # 导入统一 404 异常类型。
 from .service_common import build_api_time_range  # 导入时间范围标准化函数。
 from .service_common import normalize_meter  # 导入表计标准化函数。
@@ -43,6 +47,7 @@ AI_REPORT_TYPE_MAP = {  # 定义“报表类型”到“AI 报表类型”的映
     "daily_summary": "summary_card",  # 每日报表映射到 AI 摘要卡片类型。
     "weekly_summary": "weekly_summary",  # 周报直接映射到周报类型。
     "monthly_summary": "monthly_summary",  # 月报直接映射到月报类型。
+    "custom_summary": "summary_card",  # 自定义时间范围报表复用通用摘要卡片类型。
     "anomaly_report": "anomaly_brief",  # 异常报表映射到异常简报类型。
 }  # 结束报表类型映射定义。
 
@@ -651,7 +656,13 @@ def _persist_report(  # 定义报表持久化函数。
         )
         ON CONFLICT (report_id) DO UPDATE
         SET
+            report_type = EXCLUDED.report_type,
             status = EXCLUDED.status,
+            building_id = EXCLUDED.building_id,
+            meter = EXCLUDED.meter,
+            time_start = EXCLUDED.time_start,
+            time_end = EXCLUDED.time_end,
+            include_ai_summary = EXCLUDED.include_ai_summary,
             summary = EXCLUDED.summary,
             report_json = EXCLUDED.report_json,
             export_markdown = EXCLUDED.export_markdown,
@@ -675,8 +686,55 @@ def _persist_report(  # 定义报表持久化函数。
     )  # 完成持久化写入。
 
 
-def generate_report(payload: GenerateReportRequest, base_url: str | None = None) -> GenerateReportResponse:  # 定义生成报表主函数。
+def generate_report(  # 定义创建报表生成任务的入口函数。
+    payload: GenerateReportRequest,  # 接收报表生成请求。
+    base_url: str | None = None,  # 接收服务基础 URL，用于生成下载链接。
+    background_tasks: Any | None = None,  # 接收 FastAPI BackgroundTasks；为空时退回线程执行。
+) -> GenerateReportResponse:
     report_id = _build_report_id()  # 先生成本次报表 ID。
+    fallback_meter = normalize_meter(DEFAULT_REPORT_METER)  # 准备占位记录使用的默认表计。
+    queued_payload = {  # 先构造处理中状态的报表 JSON，保证列表接口可以立即查到。
+        "report_id": report_id,
+        "report_type": payload.report_type.value,
+        "status": ReportStatus.processing.value,
+        "time_range": payload.time_range.model_dump(mode="json"),
+        "building_id": payload.building_id,
+        "meter": fallback_meter,
+        "analyzed_meters": [fallback_meter],
+        "summary": "报表正在生成中，请稍后刷新查看。",
+        "generated_at": require_api_datetime(datetime.now()).isoformat(),
+        "include_ai_summary": payload.include_ai_summary,
+        "ai_summary_applied": False,
+        "ai_summary_skipped_reason": None if payload.include_ai_summary else "not_requested",
+        "ai_insight": None,
+        "sections": [],
+        "exports": [],
+        "download_url": None,
+    }
+    _persist_report(  # 先持久化 processing 状态，避免前端等待长任务且列表查不到。
+        report_id=report_id,
+        payload=payload,
+        meter=fallback_meter,
+        report_time_range=payload.time_range,
+        status=ReportStatus.processing,
+        summary_text="报表正在生成中，请稍后刷新查看。",
+        report_payload=queued_payload,
+        export_markdown=None,
+    )
+    if background_tasks is not None:  # FastAPI 正常请求路径使用后台任务。
+        background_tasks.add_task(_generate_report_sync, report_id, payload, base_url)
+    else:  # 非请求上下文调用时也不要阻塞调用方。
+        Thread(target=_generate_report_sync, args=(report_id, payload, base_url), daemon=True).start()
+    return GenerateReportResponse(
+        report_id=report_id,
+        status=ReportStatus.processing,
+        include_ai_summary=payload.include_ai_summary,
+        ai_summary_applied=False,
+        ai_summary_skipped_reason=None if payload.include_ai_summary else "not_requested",
+    )
+
+
+def _generate_report_sync(report_id: str, payload: GenerateReportRequest, base_url: str | None = None) -> GenerateReportResponse:  # 定义同步执行报表生成的后台任务函数。
     fallback_meter = normalize_meter(DEFAULT_REPORT_METER)  # 先定义默认回退表计，避免异常分支丢失上下文。
     display_meter = fallback_meter  # 初始化对外展示表计字段。
     analyzed_meters: list[str] = [fallback_meter]  # 初始化参与分析的表计列表。
@@ -1055,6 +1113,97 @@ def get_report_detail(report_id: str, base_url: str | None = None) -> ReportDeta
         exports=export_items,  # 写入导出描述列表。
         error_message=row.get("error_message"),  # 写入错误信息（可空）。
     )  # 完成报表详情响应构造。
+
+
+def list_reports(
+    *,
+    base_url: str | None = None,
+    report_type: str | None = None,
+    status: str | None = None,
+    building_id: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> ReportListResponse:
+    where_clauses = ["1=1"]
+    params: dict[str, Any] = {
+        "limit": page_size,
+        "offset": (page - 1) * page_size,
+    }
+
+    if report_type and str(report_type).strip():
+        where_clauses.append("report_type = :report_type")
+        params["report_type"] = str(report_type).strip()
+    if status and str(status).strip():
+        where_clauses.append("status = :status")
+        params["status"] = str(status).strip()
+    if building_id and str(building_id).strip():
+        where_clauses.append("building_id = :building_id")
+        params["building_id"] = str(building_id).strip()
+
+    where_sql = " AND ".join(where_clauses)
+    rows = fetch_all(
+        f"""
+        SELECT
+            report_id,
+            report_type,
+            status,
+            building_id,
+            include_ai_summary,
+            summary,
+            report_json,
+            error_message,
+            created_at,
+            time_start,
+            time_end
+        FROM reports
+        WHERE {where_sql}
+        ORDER BY created_at DESC, report_id DESC
+        LIMIT :limit OFFSET :offset
+        """,
+        params,
+    )
+    count_row = fetch_one(
+        f"""
+        SELECT COUNT(*) AS total
+        FROM reports
+        WHERE {where_sql}
+        """,
+        {key: value for key, value in params.items() if key not in {"limit", "offset"}},
+    ) or {"total": 0}
+    total = int(count_row.get("total") or 0)
+
+    items: list[ReportListItem] = []
+    for row in rows:
+        report_json = _coerce_report_json(row.get("report_json"))
+        start_time = to_api_datetime(row.get("time_start"))
+        end_time = to_api_datetime(row.get("time_end"))
+        if start_time is None:
+            start_time = _to_optional_datetime((report_json.get("time_range") or {}).get("start"))
+        if end_time is None:
+            end_time = _to_optional_datetime((report_json.get("time_range") or {}).get("end"))
+        if start_time is None or end_time is None:
+            continue
+        items.append(
+            ReportListItem(
+                report_id=str(row["report_id"]),
+                report_type=str(row["report_type"]),
+                status=str(row["status"]),
+                time_range=TimeRange(start=start_time, end=end_time),
+                building_id=row.get("building_id"),
+                summary=row.get("summary") or report_json.get("summary"),
+                download_url=_build_download_url(str(row["report_id"]), base_url),
+                generated_at=to_api_datetime(row.get("created_at")),
+                include_ai_summary=bool(row.get("include_ai_summary")),
+                ai_summary_applied=bool(report_json.get("ai_summary_applied")),
+                ai_summary_skipped_reason=report_json.get("ai_summary_skipped_reason"),
+                error_message=row.get("error_message"),
+            )
+        )
+
+    return ReportListResponse(
+        items=items,
+        pagination=Pagination(page=page, page_size=page_size, total=total),
+    )
 
 
 def get_report_export(report_id: str, export_format: str) -> tuple[str, str, str]:  # 定义导出内容获取函数。

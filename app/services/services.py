@@ -21,6 +21,7 @@ from .services_energy import get_energy_cop  # 导出 COP 业务函数，兼容�
 from .services_energy import get_energy_query  # 导出能耗明细业务函数，兼容旧引用。
 from .services_energy import get_energy_rankings  # 导出能耗排行业务函数，兼容旧引用。
 from .services_energy import get_energy_trend  # 导出能耗趋势业务函数，兼容旧引用。
+from .services_energy import get_energy_weather  # 导出建筑天气查询业务函数，兼容旧引用。
 from .services_energy import get_energy_weather_correlation  # 导出天气相关性业务函数，兼容旧引用。
 from .services_system import get_system_health  # 导出健康检查业务函数，兼容旧引用。
 
@@ -45,6 +46,7 @@ __all__ = [  # 定义兼容导出列表。
     "get_energy_query",  # 导出能耗明细业务函数。
     "get_energy_rankings",  # 导出能耗排行业务函数。
     "get_energy_trend",  # 导出能耗趋势业务函数。
+    "get_energy_weather",  # 导出建筑天气查询业务函数。
     "get_energy_weather_correlation",  # 导出天气相关性业务函数。
     "get_system_health",  # 导出健康检查业务函数。
     "get_timezone_now",  # 导出获取UTC+8时间的函数。

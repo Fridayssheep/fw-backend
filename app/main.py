@@ -8,6 +8,7 @@ from app.routers.router_buildings import router as buildings_router
 from app.routers.router_dashboard import router as dashboard_router
 from app.routers.router_meters import router as meters_router
 from app.routers.router_energy import router as energy_router
+from app.routers.router_knowledge import router as knowledge_router
 from app.routers.router_reports import router as reports_router
 from app.routers.router_system import router as system_router
 from .schemas_common import ErrorResponse
@@ -60,5 +61,6 @@ app.include_router(buildings_router)
 app.include_router(dashboard_router)
 app.include_router(meters_router)
 app.include_router(energy_router)
+app.include_router(knowledge_router)
 app.include_router(reports_router)
 app.include_router(ai_router)

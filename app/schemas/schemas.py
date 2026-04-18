@@ -23,7 +23,11 @@ from .schemas_ai import AIQAReferenceChunk
 from .schemas_ai import AIQAReferenceDocAgg
 from .schemas_ai import AIQAMeta
 from .schemas_ai import AIQAContext
+from .schemas_ai import AIQASessionDetailResponse
 from .schemas_ai import AIQASessionDeleteResponse
+from .schemas_ai import AIQASessionListResponse
+from .schemas_ai import AIQASessionMessage
+from .schemas_ai import AIQASessionSummary
 from .schemas_ai import AIQARequest
 from .schemas_ai import AIQAReferences
 from .schemas_ai import AIQAResponse
@@ -66,10 +70,16 @@ from .schemas_common import TimeRange
 from .schemas_energy import CopAnalysisResponse
 from .schemas_energy import CopPoint
 from .schemas_energy import CopSummary
+from .schemas_energy import BuildingWeatherPoint  # 导入建筑天气点位模型，方便聚合导出。
+from .schemas_energy import BuildingWeatherQueryResponse  # 导入建筑天气查询响应模型，方便聚合导出。
+from .schemas_energy import BuildingWeatherSeries  # 导入建筑天气序列模型，方便聚合导出。
 from .schemas_energy import AnomalyDetectorBreakdownItem
 from .schemas_energy import DetectedAnomalyEvent
 from .schemas_energy import EnergyAnomalyAnalysisRequest
 from .schemas_energy import EnergyAnomalyAnalysisResponse
+from .schemas_energy import EnergyAnomalyListItem
+from .schemas_energy import EnergyAnomalyListResponse
+from .schemas_energy import EnergyAnomalySeverityStats
 from .schemas_energy import EnergyCompareItem
 from .schemas_energy import EnergyCompareResponse
 from .schemas_energy import EnergyPoint
@@ -83,6 +93,8 @@ from .schemas_energy import EnergyTrendResponse
 from .schemas_energy import WeatherCorrelationResponse
 from .schemas_energy import WeatherFactor
 from .schemas_energy import WeatherPoint
+from .schemas_knowledge import KnowledgeDocument
+from .schemas_knowledge import KnowledgeDocumentListResponse
 from .schemas_meters import Device
 from .schemas_meters import DeviceAlarm
 from .schemas_meters import DeviceAlarmListResponse
@@ -100,6 +112,16 @@ from .schemas_meters import MeterDetailResponse
 from .schemas_meters import MeterListResponse
 from .schemas_meters import MeterStatus
 from .schemas_meters import MeterSummary
+from .schemas_reports import DeleteReportResponse
+from .schemas_reports import GenerateReportRequest
+from .schemas_reports import GenerateReportResponse
+from .schemas_reports import ReportDetailResponse
+from .schemas_reports import ReportExport
+from .schemas_reports import ReportListItem
+from .schemas_reports import ReportListResponse
+from .schemas_reports import ReportSection
+from .schemas_reports import ReportStatus
+from .schemas_reports import ReportType
 from .schemas_system import RuntimeAIFeatureSettings
 from .schemas_system import RuntimeAISettingsPayload
 from .schemas_system import RuntimeAISettingsResponse
@@ -139,7 +161,11 @@ __all__ = [
     "AIQAReferenceDocAgg",
     "AIQAContext",
     "AIQAMeta",
+    "AIQASessionDetailResponse",
     "AIQASessionDeleteResponse",
+    "AIQASessionListResponse",
+    "AIQASessionMessage",
+    "AIQASessionSummary",
     "AIQARequest",
     "AIQAReferences",
     "AIQAResponse",
@@ -169,6 +195,9 @@ __all__ = [
     "AnomalyFeedbackRequest",
     "AnomalyFeedbackResponse",
     "Building",
+    "BuildingWeatherPoint",  # 导出建筑天气点位模型。
+    "BuildingWeatherQueryResponse",  # 导出建筑天气查询响应模型。
+    "BuildingWeatherSeries",  # 导出建筑天气序列模型。
     "BuildingDetailResponse",
     "BuildingListResponse",
     "CandidateFeedbackItem",
@@ -184,6 +213,9 @@ __all__ = [
     "DeviceSummary",
     "EnergyAnomalyAnalysisRequest",
     "EnergyAnomalyAnalysisResponse",
+    "EnergyAnomalyListItem",
+    "EnergyAnomalyListResponse",
+    "EnergyAnomalySeverityStats",
     "EnergyCompareItem",
     "EnergyCompareResponse",
     "EnergyPoint",
@@ -210,6 +242,18 @@ __all__ = [
     "MeterSummary",
     "MetricCard",
     "Pagination",
+    "KnowledgeDocument",
+    "KnowledgeDocumentListResponse",
+    "DeleteReportResponse",
+    "GenerateReportRequest",
+    "GenerateReportResponse",
+    "ReportDetailResponse",
+    "ReportExport",
+    "ReportListItem",
+    "ReportListResponse",
+    "ReportSection",
+    "ReportStatus",
+    "ReportType",
     "SelectedCauseSummary",
     "RuntimeAIFeatureSettings",
     "RuntimeAISettingsPayload",

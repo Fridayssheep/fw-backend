@@ -115,6 +115,30 @@ class WeatherPoint(BaseModel):
     wind_speed: float | None = None
 
 
+class BuildingWeatherPoint(BaseModel):  # 定义建筑天气点位模型。
+    timestamp: datetime  # 定义天气点位时间字段。
+    air_temperature: float | None = None  # 定义气温字段。
+    dew_temperature: float | None = None  # 定义露点温度字段。
+    wind_speed: float | None = None  # 定义风速字段。
+    data_status: DataStatus = DataStatus.valid  # 定义点位数据状态字段。
+    data_note: str | None = None  # 定义点位数据说明字段。
+
+
+class BuildingWeatherSeries(BaseModel):  # 定义建筑天气序列模型。
+    building_id: str  # 定义建筑编号字段。
+    site_id: str | None = None  # 定义站点编号字段。
+    points: list[BuildingWeatherPoint] = Field(default_factory=list)  # 定义天气点位列表字段。
+    data_status: DataStatus = DataStatus.valid  # 定义序列数据状态字段。
+    data_note: str | None = None  # 定义序列数据说明字段。
+
+
+class BuildingWeatherQueryResponse(BaseModel):  # 定义建筑天气查询响应模型。
+    time_range: TimeRange  # 定义查询时间范围字段。
+    granularity: str  # 定义查询粒度字段。
+    series: list[BuildingWeatherSeries] = Field(default_factory=list)  # 定义建筑天气序列列表字段。
+    missing_building_ids: list[str] = Field(default_factory=list)  # 定义未匹配到元数据的建筑列表字段。
+
+
 class WeatherFactor(BaseModel):
     name: str
     coefficient: float
@@ -145,8 +169,35 @@ class AnomalyDetectorBreakdownItem(BaseModel):
     count: int
 
 
-class EnergyAnomalyAnalysisRequest(BaseModel):
+class EnergyAnomalyListItem(BaseModel):
+    anomaly_id: str
     building_id: str
+    device_id: str | None = None
+    meter: str
+    severity: str
+    status: str
+    title: str
+    start_time: datetime
+    resolution_status: str | None = None
+
+
+class EnergyAnomalySeverityStats(BaseModel):
+    total: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+
+
+class EnergyAnomalyListResponse(BaseModel):
+    time_range: TimeRange
+    items: list[EnergyAnomalyListItem] = Field(default_factory=list)
+    pagination: Pagination
+    severity_stats: EnergyAnomalySeverityStats = Field(default_factory=EnergyAnomalySeverityStats)
+
+
+class EnergyAnomalyAnalysisRequest(BaseModel):
+    building_id: str | None = None
+    site_id: str | None = None
     meter: str
     time_range: TimeRange
     granularity: str | None = "hour"

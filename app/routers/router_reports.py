@@ -1,6 +1,7 @@
 from typing import Annotated  # 导入 Annotated，用于给查询参数补充描述元数据。
 
 from fastapi import APIRouter
+from fastapi import BackgroundTasks
 from fastapi import HTTPException  # 导入 APIRouter，用于注册报表路由。
 from fastapi import Query  # 导入 Query，用于声明查询参数规则。
 from fastapi import Request  # 导入 Request，用于读取当前服务基础 URL。
@@ -11,23 +12,48 @@ from app.schemas.schemas_reports import DeleteReportResponse  # 导入统一错�
 from app.schemas.schemas_reports import GenerateReportRequest  # 导入报表生成请求模型。
 from app.schemas.schemas_reports import GenerateReportResponse  # 导入报表生成响应模型。
 from app.schemas.schemas_reports import ReportDetailResponse
+from app.schemas.schemas_reports import ReportListResponse
+from app.schemas.schemas_reports import ReportStatus
+from app.schemas.schemas_reports import ReportType
 from app.services.service_common import ResourceNotFoundError  # 导入报表详情响应模型。
 from app.services.services_reports import delete_report as delete_report_service
 from app.services.services_reports import generate_report as generate_report_service  # 导入报表生成服务函数。
 from app.services.services_reports import get_report_detail as get_report_detail_service  # 导入报表详情服务函数。
 from app.services.services_reports import get_report_export as get_report_export_service  # 导入报表导出服务函数。
+from app.services.services_reports import list_reports as list_reports_service
 
 
 router = APIRouter(tags=["Reports"])  # 创建报表路由分组并标注为 Reports。
+
+
+@router.get("/reports", response_model=ReportListResponse, summary="获取已有报表列表", operation_id="listReports")
+def list_reports_api(
+    request: Request,
+    report_type: Annotated[ReportType | None, Query(description="按报表类型筛选")] = None,
+    status: Annotated[ReportStatus | None, Query(description="按报表状态筛选")] = None,
+    building_id: Annotated[str | None, Query(description="按建筑 ID 筛选")] = None,
+    page: Annotated[int, Query(description="页码，从 1 开始", ge=1)] = 1,
+    page_size: Annotated[int, Query(description="每页数量", ge=1, le=100)] = 20,
+) -> ReportListResponse:
+    base_url = str(request.base_url).rstrip("/")
+    return list_reports_service(
+        base_url=base_url,
+        report_type=report_type.value if report_type else None,
+        status=status.value if status else None,
+        building_id=building_id,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.post("/reports/generate", response_model=GenerateReportResponse, summary="创建报表生成任务", operation_id="generateReport")  # 注册“生成报表”接口。
 def generate_report_api(  # 定义“生成报表”接口处理函数。
     payload: GenerateReportRequest,  # 接收报表生成请求体。
     request: Request,  # 接收当前请求对象。
+    background_tasks: BackgroundTasks,  # 接收 FastAPI 后台任务容器。
 ) -> GenerateReportResponse:  # 返回报表生成响应模型。
     base_url = str(request.base_url).rstrip("/")  # 读取并规范化基础 URL（去掉末尾斜杠）。
-    return generate_report_service(payload, base_url)  # 调用服务层完成报表生成并返回结果。
+    return generate_report_service(payload, base_url, background_tasks)  # 创建后台任务并立即返回任务 ID。
 
 
 @router.get("/reports/{reportId}", response_model=ReportDetailResponse, summary="获取报表详情", operation_id="getReportById", responses={404: {"model": ErrorResponse}})  # 注册“查询报表详情/下载导出”接口。

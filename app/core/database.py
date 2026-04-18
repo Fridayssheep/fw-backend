@@ -28,7 +28,10 @@ DATABASE_URL = _build_database_url()  # 按原来的 psycopg2 写法拼接 SQLAl
 
 engine: Engine = create_engine(  # 创建同步数据库引擎，当前项目用同步方式最简单直接。
     DATABASE_URL,  # 使用上面拼好的数据库连接串。
+    pool_size=20,  # 显式增大连接池大小，从默认的 5 增加到 20，避免高并发下连接排队超时。
+    max_overflow=10,  # 允许在连接池满时额外临时开启 10 个连接。
     pool_pre_ping=True,  # 每次取连接前先做探活，避免长时间空闲连接失效。
+    pool_timeout=30,  # 获取连接的超时时间设置为 30 秒，与前端 30s 接口超时匹配。
 )
 
 
