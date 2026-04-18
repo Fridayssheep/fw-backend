@@ -32,13 +32,13 @@ from .services_energy import build_summary  # 导入能耗摘要构造函数。
 
 DEFAULT_WINDOW_DAYS = 7  # 定义指标卡片默认统计窗口天数。
 DEFAULT_METER_PRIORITY = ["electricity", "chilledwater", "hotwater", "steam", "water", "gas", "solar", "irrigation"]  # 定义默认优先展示的表计顺序。
-
+CARBON_FACTOR = 0.554  # 统一碳排放因子
 
 def map_building_row_to_model(row: dict[str, Any]) -> Building:  # 定义把建筑查询结果映射成建筑模型的函数。
     return Building(  # 返回建筑基础信息模型。
         building_id=str(row["building_id"]),  # 写入建筑编号字段。
-        site_id=str(row["site_id"]),  # 写入园区编号字段。
-        primaryspaceusage=str(row["primaryspaceusage"]),  # 写入主要用途字段。
+        site_id=str(row.get("site_id") or ""),  # 写入园区编号字段。
+        primaryspaceusage=str(row.get("primaryspaceusage") or "Unknown"),  # 写入主要用途字段。
         sub_primaryspaceusage=normalize_text(row.get("sub_primaryspaceusage")),  # 写入次级用途字段。
         sqm=normalize_optional_float(row.get("sqm")),  # 写入建筑面积字段。
         lat=normalize_optional_float(row.get("lat")),  # 写入纬度字段。
@@ -46,6 +46,10 @@ def map_building_row_to_model(row: dict[str, Any]) -> Building:  # 定义把建�
         timezone=normalize_text(row.get("timezone")),  # 写入时区字段。
         yearbuilt=normalize_optional_int(row.get("yearbuilt")),  # 写入建成年份字段。
         leed_level=normalize_text(row.get("leed_level")),  # 写入 LEED 等级字段。
+        # --- 新增：动态计算字段映射 ---
+        energy=round_optional_float(row.get("energy")),
+        eui=round_optional_float(row.get("eui")),
+        carbon=round_optional_float(row.get("carbon")),
     )  # 完成建筑模型构造。
 
 
@@ -69,6 +73,88 @@ def build_building_filters(  # 定义构造建筑列表过滤条件的函数。
         clauses.append("bm.primaryspaceusage ILIKE :primaryspaceusage")  # 就增加用途过滤条件。
         params["primaryspaceusage"] = normalized_usage  # 写入用途参数。
     return " AND ".join(clauses), params  # 返回完整 where 条件和参数字典。
+
+
+def get_buildings(  # 定义建筑列表查询接口业务函数。
+    keyword: str | None,
+    site_id: str | None,
+    primaryspaceusage: str | None,
+    min_energy: float | None,
+    max_energy: float | None,
+    min_eui: float | None,
+    max_eui: float | None,
+    min_carbon: float | None,
+    max_carbon: float | None,
+    start_time: str | None,
+    end_time: str | None,
+    page: int,
+    page_size: int,
+) -> BuildingListResponse:  # 返回建筑列表响应模型。
+    # 1. 确定时间范围（用于能耗聚合）
+    resolved_start, resolved_end = resolve_time_range(start_time, end_time, [], None, 'electricity')
+    
+    # 2. 构造基础过滤条件
+    where_sql, params = build_building_filters(keyword, site_id, primaryspaceusage)
+    
+    # 3. 准备 SQL 参数
+    params.update({
+        "start_date": resolved_start.date(),
+        "end_date": resolved_end.date(),
+        "min_energy": min_energy,
+        "max_energy": max_energy,
+        "min_eui": min_eui,
+        "max_eui": max_eui,
+        "min_carbon": min_carbon,
+        "max_carbon": max_carbon,
+    })
+
+    # 4. 编写带聚合筛选的 SQL (使用 CTE 优化性能)
+    # 通过 meter_daily_agg 表按建筑和时间范围聚合能耗
+    sql_base = f"""
+        WITH aggregated_energy AS (
+            SELECT 
+                building_id,
+                SUM(reading_sum) as total_energy,
+                SUM(reading_sum) * {CARBON_FACTOR} as total_carbon
+            FROM meter_daily_agg
+            WHERE bucket_day >= :start_date AND bucket_day <= :end_date
+              AND meter = 'electricity'
+            GROUP BY building_id
+        ),
+        final_buildings AS (
+            SELECT
+                bm.*,
+                COALESCE(ae.total_energy, 0) as energy,
+                COALESCE(ae.total_carbon, 0) as carbon,
+                CASE WHEN bm.sqm > 0 THEN COALESCE(ae.total_energy, 0) / bm.sqm ELSE 0 END as eui
+            FROM building_metadata bm
+            LEFT JOIN aggregated_energy ae ON bm.building_id = ae.building_id
+            WHERE {where_sql}
+        )
+        SELECT * FROM final_buildings
+        WHERE (:min_energy IS NULL OR energy >= :min_energy)
+          AND (:max_energy IS NULL OR energy <= :max_energy)
+          AND (:min_eui IS NULL OR eui >= :min_eui)
+          AND (:max_eui IS NULL OR eui <= :max_eui)
+          AND (:min_carbon IS NULL OR carbon >= :min_carbon)
+          AND (:max_carbon IS NULL OR carbon <= :max_carbon)
+    """
+
+    # 5. 执行分页与总数查询
+    safe_page, safe_page_size, offset = normalize_pagination(page, page_size)
+    
+    total = int(fetch_scalar(f"SELECT COUNT(*) FROM ({sql_base}) AS t", params) or 0)
+    
+    rows = fetch_all(
+        f"{sql_base} ORDER BY building_id ASC LIMIT :limit OFFSET :offset",
+        {**params, "limit": safe_page_size, "offset": offset},
+    )
+
+    items = [map_building_row_to_model(row) for row in rows]
+    return BuildingListResponse(
+        items=items,
+        pagination=Pagination(page=safe_page, page_size=safe_page_size, total=total),
+    )
 
 
 def get_building_row_or_raise(building_id: str) -> dict[str, Any]:  # 定义查询单个建筑基础信息并在缺失时抛错的函数。
@@ -245,55 +331,6 @@ def build_building_summary_metrics(building_id: str, building_row: dict[str, Any
             )  # 完成最近窗口总量卡片对象创建。
         )  # 完成最近窗口总量卡片追加。
     return cards  # 返回完整指标卡片列表。
-
-
-def get_buildings(  # 定义建筑列表查询接口业务函数。
-    keyword: str | None,  # 接收关键字参数。
-    site_id: str | None,  # 接收园区编号参数。
-    primaryspaceusage: str | None,  # 接收主要用途参数。
-    page: int,  # 接收页码参数。
-    page_size: int,  # 接收每页条数参数。
-) -> BuildingListResponse:  # 返回建筑列表响应模型。
-    where_sql, params = build_building_filters(keyword, site_id, primaryspaceusage)  # 先构造建筑查询过滤条件。
-    safe_page, safe_page_size, offset = normalize_pagination(page, page_size)  # 标准化分页参数。
-    total = int(  # 查询命中条件的建筑总数。
-        fetch_scalar(  # 执行建筑总数查询。
-            f"""
-            SELECT COUNT(*)
-            FROM building_metadata bm
-            WHERE {where_sql}
-            """,
-            params,
-        ) or 0  # 如果数据库返回空值，就回退到 0。
-    )  # 完成总数转换。
-    rows = fetch_all(  # 查询当前分页的建筑列表数据。
-        f"""
-        SELECT
-            bm.building_id,
-            bm.site_id,
-            bm.primaryspaceusage,
-            bm.sub_primaryspaceusage,
-            bm.sqm,
-            bm.lat,
-            bm.lng,
-            bm.timezone,
-            bm.yearbuilt,
-            bm.leed_level
-        FROM building_metadata bm
-        WHERE {where_sql}
-        ORDER BY bm.building_id ASC
-        LIMIT :limit
-        OFFSET :offset
-        """,
-        {**params, "limit": safe_page_size, "offset": offset},
-    )  # 执行建筑分页查询。
-    items: list[Building] = []  # 初始化建筑模型列表。
-    for row in rows:  # 遍历每一条建筑查询结果。
-        items.append(map_building_row_to_model(row))  # 把当前结果映射成建筑模型并追加进列表。
-    return BuildingListResponse(  # 构造并返回建筑列表响应。
-        items=items,  # 写入当前页建筑列表。
-        pagination=Pagination(page=safe_page, page_size=safe_page_size, total=total),  # 写入分页对象。
-    )  # 完成建筑列表响应构造。
 
 
 def get_building_detail(building_id: str) -> BuildingDetailResponse:  # 定义建筑详情查询接口业务函数。

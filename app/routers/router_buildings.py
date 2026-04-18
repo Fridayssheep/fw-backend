@@ -24,10 +24,34 @@ def get_buildings_api(  # 定义建筑列表查询处理函数。
     keyword: Annotated[str | None, Query()] = None,  # 声明 keyword 查询参数。
     site_id: Annotated[str | None, Query()] = None,  # 声明 site_id 查询参数。
     primaryspaceusage: Annotated[str | None, Query()] = None,  # 声明 primaryspaceusage 查询参数。
+    # --- 新增：能耗与动态指标筛选 ---
+    min_energy: Annotated[float | None, Query()] = None,
+    max_energy: Annotated[float | None, Query()] = None,
+    min_eui: Annotated[float | None, Query()] = None,
+    max_eui: Annotated[float | None, Query()] = None,
+    min_carbon: Annotated[float | None, Query()] = None,
+    max_carbon: Annotated[float | None, Query()] = None,
+    start_time: Annotated[str | None, Query()] = None,
+    end_time: Annotated[str | None, Query()] = None,
+    # -----------------------------
     page: Annotated[PageQueryInt, Query()] = 1,  # 声明页码参数并给默认值，同时兼容空字符串。
     page_size: Annotated[PageSizeQueryInt, Query()] = 20,  # 声明每页条数参数并给默认值，同时兼容空字符串。
 ) -> BuildingListResponse:  # 返回建筑列表响应模型。
-    return get_buildings_service(keyword, site_id, primaryspaceusage, page, page_size)  # 调用业务层并返回结果。
+    return get_buildings_service(
+        keyword=keyword, 
+        site_id=site_id, 
+        primaryspaceusage=primaryspaceusage,
+        min_energy=min_energy,
+        max_energy=max_energy,
+        min_eui=min_eui,
+        max_eui=max_eui,
+        min_carbon=min_carbon,
+        max_carbon=max_carbon,
+        start_time=start_time,
+        end_time=end_time,
+        page=page, 
+        page_size=page_size
+    )  # 调用业务层并返回结果。
 
 
 @router.get("/buildings/{buildingId}", response_model=BuildingDetailResponse, summary="获取建筑详情", responses={404: {"model": ErrorResponse}})  # 注册建筑详情查询接口。
