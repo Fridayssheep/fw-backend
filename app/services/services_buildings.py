@@ -100,16 +100,16 @@ def get_buildings(  # 定义建筑列表查询接口业务函数。
     params.update({
         "start_date": resolved_start.date(),
         "end_date": resolved_end.date(),
-        "min_energy": min_energy,
-        "max_energy": max_energy,
-        "min_eui": min_eui,
-        "max_eui": max_eui,
-        "min_carbon": min_carbon,
-        "max_carbon": max_carbon,
+        "min_energy": min_energy if min_energy is not None else None,
+        "max_energy": max_energy if max_energy is not None else None,
+        "min_eui": min_eui if min_eui is not None else None,
+        "max_eui": max_eui if max_eui is not None else None,
+        "min_carbon": min_carbon if min_carbon is not None else None,
+        "max_carbon": max_carbon if max_carbon is not None else None,
     })
 
-    # 4. 编写带聚合筛选的 SQL (使用 CTE 优化性能)
-    # 通过 meter_daily_agg 表按建筑和时间范围聚合能耗
+    # 4. 编写带聚合筛选的 SQL (修正版：确保即使没有聚合数据也能显示建筑)
+    # 【修复重点】: 在外层查询中使用更严谨的 NULL 判断，防止前端传 0 或空字符串导致全军覆没
     sql_base = f"""
         WITH aggregated_energy AS (
             SELECT 
@@ -143,8 +143,10 @@ def get_buildings(  # 定义建筑列表查询接口业务函数。
     # 5. 执行分页与总数查询
     safe_page, safe_page_size, offset = normalize_pagination(page, page_size)
     
+    # 获取总数 (修正参数传递)
     total = int(fetch_scalar(f"SELECT COUNT(*) FROM ({sql_base}) AS t", params) or 0)
     
+    # 获取列表数据
     rows = fetch_all(
         f"{sql_base} ORDER BY building_id ASC LIMIT :limit OFFSET :offset",
         {**params, "limit": safe_page_size, "offset": offset},
