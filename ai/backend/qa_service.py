@@ -299,7 +299,7 @@ def _has_context_for_fault_analysis(context: AIQAContext | None) -> bool:
 
     return bool(
         context
-        and context.building_id
+        and (context.building_id or context.site_id)
         and context.meter
         and context.time_range
     )
@@ -1024,37 +1024,26 @@ def _handle_fault_analysis_question(payload: AIQARequest, settings_model: str) -
     """处理带业务上下文的异常/故障分析类问题。"""
 
     total_start = perf_counter()
+    # 如果完全没有上下文（建筑、站点、表计、时间），则不能执行直接诊断
     if not _has_context_for_fault_analysis(payload.context):
-        references = AIQAReferences()
-        used_tools: list[AIUsedToolItem] = []
-        stage_timings_ms = {
-            "total_ms": _duration_ms(total_start),
+        _publish_qa_status("由于当前缺少明确的诊断对象，AI 助手将尝试通过知识库和数据检索提供一般性分析。", "fault_analysis_context_fallback")
+        
+        # 这种场景下，我们将其重定向到 mixed 逻辑，但强制开启知识和数据信号
+        fallback_signals = {
+            "knowledge": True,
+            "data_query": True,
+            "fault_analysis": False,  # 当前确实没法直接做诊断
         }
-        return AIQAResponse(
-            session_id="",
-            answer=(
-                "这个问题更像异常/故障分析，但当前缺少必要上下文。"
-                "请至少提供 building_id、meter 和 time_range，或从异常详情页带着上下文发起提问。"
-            ),
-            question_type="fault_analysis",
-            references=references,
-            used_tools=used_tools,
-            suggested_actions=[
-                AISuggestedAction(
-                    label="前往异常分析页",
-                    action_type="open_page",
-                    target="anomaly_detail",
-                )
-            ],
-            meta=_build_meta_with_timings(settings_model, used_tools, references, stage_timings_ms),
-        )
+        # 使用特定的混合处理逻辑，告诉用户现状并提供背景知识和数据建议
+        return _handle_fallback_mixed_question(payload, settings_model, fallback_signals, total_start)
 
     context = payload.context
     _publish_qa_status("调用异常诊断能力分析当前上下文...", "analyze_anomaly_with_ai", event_type="mcp_tool")
     anomaly_analysis_start = perf_counter()
     anomaly_result = analyze_anomaly_with_ai(
         AIAnalyzeAnomalyRequest(
-            building_id=context.building_id or "",
+            building_id=context.building_id,
+            site_id=context.site_id,
             meter=context.meter or "electricity",
             time_range=context.time_range,
             include_weather_context=True,
@@ -1080,6 +1069,62 @@ def _handle_fault_analysis_question(payload: AIQARequest, settings_model: str) -
         references=references,
         used_tools=used_tools,
         suggested_actions=_build_actions_from_anomaly(anomaly_result),
+        meta=_build_meta_with_timings(settings_model, used_tools, references, stage_timings_ms),
+    )
+
+
+def _handle_fallback_mixed_question(
+    payload: AIQARequest,
+    settings_model: str,
+    signals: dict[str, bool],
+    total_start: float,
+) -> AIQAResponse:
+    """内部使用的混合处理逻辑，用于处理诊断场景下的上下文缺失。"""
+
+    used_tools: list[AIUsedToolItem] = []
+    suggested_actions: list[AISuggestedAction] = []
+    reference_groups: list[AIQAReferences] = []
+    answer_parts: list[dict[str, Any]] = []
+    stage_timings_ms: dict[str, int] = {}
+
+    # 1. 尝试检索知识库，给出排查方法论
+    if signals["knowledge"]:
+        knowledge_response = _handle_knowledge_question(payload, settings_model)
+        reference_groups.append(knowledge_response.references)
+        used_tools.extend(knowledge_response.used_tools)
+        suggested_actions.extend(knowledge_response.suggested_actions)
+        answer_parts.append(_build_mixed_part("knowledge", knowledge_response))
+        stage_timings_ms.update(
+            _prefix_stage_timings("knowledge", knowledge_response.meta.stage_timings_ms)
+        )
+
+    # 2. 尝试执行通用的数据查询（例如查找异常建筑、查找 EUI 高的楼）
+    if signals["data_query"]:
+        data_response = _handle_data_query_question(payload, settings_model)
+        reference_groups.append(data_response.references)
+        used_tools.extend(data_response.used_tools)
+        suggested_actions.extend(data_response.suggested_actions)
+        answer_parts.append(_build_mixed_part("data_query", data_response))
+        stage_timings_ms.update(
+            _prefix_stage_timings("data_query", data_response.meta.stage_timings_ms)
+        )
+
+    references = _merge_references(*reference_groups)
+    deduped_actions = _dedupe_actions(suggested_actions)
+
+    _publish_qa_status("汇总知识库与数据检索结果...", "mixed_synthesis")
+    mixed_synthesis_start = perf_counter()
+    answer = _synthesize_mixed_answer(payload.question, answer_parts)
+    stage_timings_ms["mixed_synthesis_ms"] = _duration_ms(mixed_synthesis_start)
+    stage_timings_ms["total_ms"] = _duration_ms(total_start)
+
+    return AIQAResponse(
+        session_id="",
+        answer=answer,
+        question_type="fault_analysis",  # 保持诊断意图，但内容是综合的
+        references=references,
+        used_tools=used_tools,
+        suggested_actions=deduped_actions,
         meta=_build_meta_with_timings(settings_model, used_tools, references, stage_timings_ms),
     )
 

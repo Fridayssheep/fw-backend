@@ -43,7 +43,8 @@ class AIFeedbackPrompt(BaseModel):
 
 
 class AIAnalyzeAnomalyMeta(BaseModel):
-    building_id: str
+    building_id: str | None = None
+    site_id: str | None = None
     meter: str
     time_range: TimeRange
     analysis_mode: str = "offline_event_review"
@@ -59,7 +60,8 @@ class AIAnalyzeAnomalyMeta(BaseModel):
 
 
 class AIAnalyzeAnomalyRequest(BaseModel):
-    building_id: str
+    building_id: str | None = None
+    site_id: str | None = None
     meter: str
     time_range: TimeRange
     granularity: str | None = "hour"
@@ -403,6 +405,7 @@ class AIQARequest(CurrentTimeContext):
 
 class AIQAContext(BaseModel):
     building_id: str | None = Field(None, description="当前页面建筑 ID")
+    site_id: str | None = Field(None, description="当前页面站点 ID")
     meter: str | None = Field(None, description="当前页面表计类型")
     time_range: TimeRange | None = Field(None, description="当前页面时间范围")
 

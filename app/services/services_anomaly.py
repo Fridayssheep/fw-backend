@@ -134,8 +134,8 @@ def get_energy_anomaly_analysis(
 
     # 查原始能耗数据用于前台绘图展示，同时防止空查报错
     _, _, _, rows = query_trend_rows(
-        building_ids=[payload.building_id],
-        site_id=None,
+        building_ids=[payload.building_id] if payload.building_id else None,
+        site_id=payload.site_id,
         meter=payload.meter,
         start_time=payload.time_range.start,
         end_time=payload.time_range.end,
@@ -143,23 +143,34 @@ def get_energy_anomaly_analysis(
     )
     points = map_energy_rows_to_points(rows)
     
+    # 构造异常事件查询条件
+    anomaly_clauses = ["meter = :meter", "start_time >= :start_time", "start_time <= :end_time"]
+    anomaly_params = {
+        "meter": payload.meter,
+        "start_time": resolved_start,
+        "end_time": resolved_end,
+    }
+    
+    if payload.building_id:
+        anomaly_clauses.append("building_id = :building_id")
+        anomaly_params["building_id"] = payload.building_id
+    elif payload.site_id:
+        # 如果是站点级别，需要关联元数据表
+        anomaly_clauses.append("building_id IN (SELECT building_id FROM building_metadata WHERE site_id = :site_id)")
+        anomaly_params["site_id"] = payload.site_id
+    else:
+        # 兜底：如果都没有，则不查任何异常（或查全部，根据业务定，这里选择不查）
+        anomaly_clauses.append("1=0")
+
     # 查 offline_anomaly_detector 的检测结果
     anomaly_rows = fetch_all(
-        """
+        f"""
         SELECT id, start_time, end_time, peak_deviation, severity, detected_by, description
         FROM anomaly_events
-        WHERE building_id = :building_id
-          AND meter = :meter
-          AND start_time >= :start_time
-          AND start_time <= :end_time
+        WHERE {" AND ".join(anomaly_clauses)}
         ORDER BY start_time ASC
         """,
-        {
-            "building_id": payload.building_id,
-            "meter": payload.meter,
-            "start_time": resolved_start,
-            "end_time": resolved_end,
-        },
+        anomaly_params,
     )
 
     detected_events: list[DetectedAnomalyEvent] = []
@@ -187,10 +198,13 @@ def get_energy_anomaly_analysis(
 
     weather_context = None
     if payload.include_weather_context:
-        weather_context = get_weather_context(payload.building_id, resolved_start, resolved_end)
+        # 天气目前主要基于建筑或站点，如果只有站点，get_weather_context 可能需要调整，
+        # 但目前它基于 building_id。这里先简单处理。
+        if payload.building_id:
+            weather_context = get_weather_context(payload.building_id, resolved_start, resolved_end)
 
     return EnergyAnomalyAnalysisResponse(
-        building_id=payload.building_id,
+        building_id=payload.building_id or "site_level",
         meter=normalized_meter,
         time_range=build_api_time_range(resolved_start, resolved_end),
         is_anomalous=is_anomalous,
@@ -200,7 +214,7 @@ def get_energy_anomaly_analysis(
         detector_breakdown=detector_breakdown,
         detected_events=detected_events,
         series=EnergySeries(
-            building_id=payload.building_id,
+            building_id=payload.building_id or "site_level",
             meter=normalized_meter,
             unit=get_meter_unit(normalized_meter),
             points=points,

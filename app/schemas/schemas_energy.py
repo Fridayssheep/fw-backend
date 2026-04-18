@@ -196,7 +196,8 @@ class EnergyAnomalyListResponse(BaseModel):
 
 
 class EnergyAnomalyAnalysisRequest(BaseModel):
-    building_id: str
+    building_id: str | None = None
+    site_id: str | None = None
     meter: str
     time_range: TimeRange
     granularity: str | None = "hour"
