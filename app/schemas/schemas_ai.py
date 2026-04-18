@@ -89,13 +89,24 @@ class AIAnalyzeAnomalyResponse(BaseModel):
 class AIQueryIntent(BaseModel):
     building_ids: list[str] = Field(default_factory=list)
     building_id: str | None = None
+    keyword: str | None = None
     site_id: str | None = None
+    primaryspaceusage: str | None = None
+    status: str | None = None
     meter: str | None = None
     time_range: TimeRange | None = None
+    min_energy: float | None = None
+    max_energy: float | None = None
+    min_eui: float | None = None
+    max_eui: float | None = None
+    min_carbon: float | None = None
+    max_carbon: float | None = None
     granularity: str | None = None
     aggregation: str | None = None
     metric: str | None = None
     order: str | None = None
+    sort_by: str | None = None
+    sort_order: str | None = None
     limit: int | None = None
     page: int | None = None
     page_size: int | None = None
@@ -106,13 +117,24 @@ class AIQueryIntent(BaseModel):
 class AIQueryAssistantFilters(BaseModel):
     building_ids: list[str] = Field(default_factory=list)
     building_id: str | None = None
+    keyword: str | None = None
     site_id: str | None = None
+    primaryspaceusage: str | None = None
+    status: str | None = None
     meter: str | None = None
     time_range: TimeRange | None = None
+    min_energy: float | None = None
+    max_energy: float | None = None
+    min_eui: float | None = None
+    max_eui: float | None = None
+    min_carbon: float | None = None
+    max_carbon: float | None = None
     granularity: str | None = None
     aggregation: str | None = None
     metric: str | None = None
     order: str | None = None
+    sort_by: str | None = None
+    sort_order: str | None = None
     limit: int | None = None
     page: int | None = None
     page_size: int | None = None
@@ -135,6 +157,7 @@ class AIQueryAssistantUIPatch(BaseModel):
 
 class AIQueryAssistantRequest(CurrentTimeContext):
     question: str
+    target_scope: str = Field(default="energy", description="助手目标范围：energy / building_query")
     current_endpoint: str | None = None
     current_filters: AIQueryAssistantFilters | None = None
 

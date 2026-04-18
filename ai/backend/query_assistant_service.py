@@ -42,6 +42,8 @@ ALLOWED_QUERY_ENDPOINTS = {
     '/energy/weather-correlation',
     '/energy/anomaly-analysis',
 }
+BUILDING_QUERY_ENDPOINT = '/buildings'
+ALLOWED_BUILDING_QUERY_ENDPOINTS = {BUILDING_QUERY_ENDPOINT}
 
 METER_KEYWORDS = {
     'electricity': ('电耗', '电能', '用电', '电量', 'electricity', 'power'),
@@ -51,12 +53,31 @@ METER_KEYWORDS = {
     'chilledwater': ('冷冻水', '冷量', 'chilledwater'),
     'hotwater': ('热水', 'hotwater'),
 }
+PRIMARY_SPACE_KEYWORDS = {
+    'Office': ('办公', '办公楼', 'office'),
+    'Retail': ('零售', '商业', '商场', 'retail'),
+    'Education': ('教育', '学校', '教学', 'education'),
+    'Healthcare': ('医疗', '医院', 'healthcare'),
+}
+BUILDING_STATUS_KEYWORDS = {
+    'normal': ('正常', '正常运行', '运行正常'),
+    'warning': ('告警', '预警', 'warning'),
+    'fault': ('故障', '停机', 'fault'),
+    'offline': ('离线', '掉线', 'offline'),
+}
+BUILDING_QUERY_SORT_FIELDS = {
+    'eui': ('eui', '能效', '能耗强度'),
+    'totalEnergy': ('总能耗', '能耗总量', 'energy'),
+    'carbonEmission': ('碳排放', 'carbon'),
+    'status': ('状态', '系统状态'),
+}
 
 DATE_TOKEN_REGEX = r'(\d{4})(?:[-/.年])(\d{1,2})(?:[-/.月])(\d{1,2})日?'
 DATE_TOKEN_PATTERN = re.compile(DATE_TOKEN_REGEX)
 DATE_RANGE_PATTERN = re.compile(
     rf'(?P<start>{DATE_TOKEN_REGEX})\s*(?:到|至|~|～)\s*(?P<end>{DATE_TOKEN_REGEX})'
 )
+SITE_ID_PATTERN = re.compile(r'\bsite[_-]?[A-Za-z0-9]+\b', flags=re.IGNORECASE)
 
 
 def _now_with_tz(request: AIQueryAssistantRequest) -> datetime:
@@ -109,6 +130,81 @@ def _extract_building_ids(question: str) -> list[str]:
         if item not in unique_items:
             unique_items.append(item)
     return unique_items
+
+
+def _extract_keyword(question: str) -> tuple[str | None, list[str]]:
+    warnings: list[str] = []
+    building_ids = _extract_building_ids(question)
+    if len(building_ids) >= 2:
+        warnings.append('查询页当前仅支持单次聚焦一组筛选，已优先采用第一个建筑关键词。')
+    if building_ids:
+        return building_ids[0], warnings
+    quoted_match = re.search(r'[“"](.*?)[”"]', question)
+    if quoted_match and quoted_match.group(1).strip():
+        return quoted_match.group(1).strip(), warnings
+    return None, warnings
+
+
+def _extract_site_id(question: str) -> str | None:
+    match = SITE_ID_PATTERN.search(question)
+    if not match:
+        return None
+    return match.group(0)
+
+
+def _extract_primaryspaceusage(question: str) -> str | None:
+    lowered = question.lower()
+    for usage, keywords in PRIMARY_SPACE_KEYWORDS.items():
+        if any(keyword.lower() in lowered for keyword in keywords):
+            return usage
+    return None
+
+
+def _extract_status(question: str) -> str | None:
+    lowered = question.lower()
+    for status, keywords in BUILDING_STATUS_KEYWORDS.items():
+        if any(keyword.lower() in lowered for keyword in keywords):
+            return status
+    return None
+
+
+def _extract_sort_field(question: str) -> str | None:
+    lowered = question.lower()
+    for field, keywords in BUILDING_QUERY_SORT_FIELDS.items():
+        if any(keyword.lower() in lowered for keyword in keywords):
+            return field
+    return None
+
+
+def _extract_metric_range(question: str, keywords: tuple[str, ...]) -> tuple[float | None, float | None]:
+    lowered = question.lower()
+    if not any(keyword.lower() in lowered for keyword in keywords):
+        return None, None
+
+    escaped_keywords = "|".join(re.escape(keyword) for keyword in keywords)
+    range_match = re.search(
+        rf'(?:{escaped_keywords}).*?(\d+(?:\.\d+)?)\s*(?:到|至|~|～|-)\s*(\d+(?:\.\d+)?)',
+        question,
+        flags=re.IGNORECASE,
+    )
+    if range_match:
+        left = float(range_match.group(1))
+        right = float(range_match.group(2))
+        return (left, right) if left <= right else (right, left)
+
+    min_match = re.search(
+        rf'(?:{escaped_keywords}).*?(?:大于|高于|超过|不少于|不低于|>=)\s*(\d+(?:\.\d+)?)',
+        question,
+        flags=re.IGNORECASE,
+    )
+    max_match = re.search(
+        rf'(?:{escaped_keywords}).*?(?:小于|低于|少于|不高于|不超过|<=)\s*(\d+(?:\.\d+)?)',
+        question,
+        flags=re.IGNORECASE,
+    )
+    min_value = float(min_match.group(1)) if min_match else None
+    max_value = float(max_match.group(1)) if max_match else None
+    return min_value, max_value
 
 
 def _parse_date_token(raw_value: str, now: datetime) -> datetime | None:
@@ -259,7 +355,88 @@ def _merge_with_current_filters(
     )
 
 
-def _recommend_endpoint(question: str, intent: AIQueryIntent) -> str:
+def _merge_building_query_with_current_filters(
+    payload: AIQueryAssistantRequest,
+    *,
+    keyword: str | None,
+    site_id: str | None,
+    primaryspaceusage: str | None,
+    status: str | None,
+    time_range: TimeRange | None,
+    min_energy: float | None,
+    max_energy: float | None,
+    min_eui: float | None,
+    max_eui: float | None,
+    min_carbon: float | None,
+    max_carbon: float | None,
+    sort_by: str | None,
+    sort_order: str | None,
+) -> tuple[str | None, str | None, str | None, str | None, TimeRange | None, float | None, float | None, float | None, float | None, float | None, float | None, str | None, str | None, list[str]]:
+    warnings: list[str] = []
+    current_filters = payload.current_filters
+    if current_filters is None:
+        return (
+            keyword,
+            site_id,
+            primaryspaceusage,
+            status,
+            time_range,
+            min_energy,
+            max_energy,
+            min_eui,
+            max_eui,
+            min_carbon,
+            max_carbon,
+            sort_by,
+            sort_order,
+            warnings,
+        )
+
+    merged_keyword = keyword or current_filters.keyword
+    merged_site_id = site_id or current_filters.site_id
+    merged_primaryspaceusage = primaryspaceusage or current_filters.primaryspaceusage
+    merged_status = status or current_filters.status
+    merged_time_range = time_range or current_filters.time_range
+    merged_min_energy = min_energy if min_energy is not None else current_filters.min_energy
+    merged_max_energy = max_energy if max_energy is not None else current_filters.max_energy
+    merged_min_eui = min_eui if min_eui is not None else current_filters.min_eui
+    merged_max_eui = max_eui if max_eui is not None else current_filters.max_eui
+    merged_min_carbon = min_carbon if min_carbon is not None else current_filters.min_carbon
+    merged_max_carbon = max_carbon if max_carbon is not None else current_filters.max_carbon
+    merged_sort_by = sort_by or current_filters.sort_by
+    merged_sort_order = sort_order or current_filters.sort_order
+
+    if keyword is None and current_filters.keyword:
+        warnings.append("未明确建筑关键词，已沿用当前页面关键词筛选。")
+    if site_id is None and current_filters.site_id:
+        warnings.append("未明确站点范围，已沿用当前页面站点筛选。")
+    if primaryspaceusage is None and current_filters.primaryspaceusage:
+        warnings.append("未明确建筑用途，已沿用当前页面用途筛选。")
+    if status is None and current_filters.status:
+        warnings.append("未明确建筑状态，已沿用当前页面状态筛选。")
+    if time_range is None and current_filters.time_range:
+        warnings.append("未明确时间范围，已沿用当前页面时间筛选。")
+    return (
+        merged_keyword,
+        merged_site_id,
+        merged_primaryspaceusage,
+        merged_status,
+        merged_time_range,
+        merged_min_energy,
+        merged_max_energy,
+        merged_min_eui,
+        merged_max_eui,
+        merged_min_carbon,
+        merged_max_carbon,
+        merged_sort_by,
+        merged_sort_order,
+        warnings,
+    )
+
+
+def _recommend_endpoint(question: str, intent: AIQueryIntent, target_scope: str = "energy") -> str:
+    if target_scope == "building_query":
+        return BUILDING_QUERY_ENDPOINT
     lowered = question.lower()
     building_count = len(intent.building_ids)
     if any(keyword in lowered for keyword in ('异常', '告警', '诊断', 'anomaly')):
@@ -285,6 +462,24 @@ def _http_method_for_endpoint(endpoint: str) -> str:
 
 def _intent_to_query_params(intent: AIQueryIntent, endpoint: str) -> dict[str, Any]:
     params: dict[str, Any] = {}
+    if endpoint == BUILDING_QUERY_ENDPOINT:
+        params = {
+            'keyword': intent.keyword,
+            'site_id': intent.site_id,
+            'primaryspaceusage': intent.primaryspaceusage,
+            'status': intent.status,
+            'start_time': intent.time_range.start.isoformat() if intent.time_range else None,
+            'end_time': intent.time_range.end.isoformat() if intent.time_range else None,
+            'min_energy': intent.min_energy,
+            'max_energy': intent.max_energy,
+            'min_eui': intent.min_eui,
+            'max_eui': intent.max_eui,
+            'min_carbon': intent.min_carbon,
+            'max_carbon': intent.max_carbon,
+            'page': intent.page,
+            'page_size': intent.page_size,
+        }
+        return {key: value for key, value in params.items() if value not in (None, '', [], {})}
     if intent.building_ids and endpoint in {'/energy/query', '/energy/trend', '/energy/compare'}:
         params['building_ids'] = intent.building_ids
     if intent.building_id and endpoint in {'/energy/weather-correlation', '/energy/cop'}:
@@ -339,13 +534,24 @@ def _build_applied_filters(intent: AIQueryIntent, endpoint: str) -> AIQueryAssis
     return AIQueryAssistantFilters(
         building_ids=intent.building_ids,
         building_id=building_id,
+        keyword=intent.keyword,
         site_id=intent.site_id,
+        primaryspaceusage=intent.primaryspaceusage,
+        status=intent.status,
         meter=intent.meter,
         time_range=intent.time_range,
+        min_energy=intent.min_energy,
+        max_energy=intent.max_energy,
+        min_eui=intent.min_eui,
+        max_eui=intent.max_eui,
+        min_carbon=intent.min_carbon,
+        max_carbon=intent.max_carbon,
         granularity=intent.granularity,
         aggregation=intent.aggregation,
         metric=intent.metric,
         order=intent.order,
+        sort_by=intent.sort_by,
+        sort_order=intent.sort_order,
         limit=intent.limit,
         page=intent.page,
         page_size=intent.page_size,
@@ -355,6 +561,27 @@ def _build_applied_filters(intent: AIQueryIntent, endpoint: str) -> AIQueryAssis
 
 
 def _build_ui_patch(endpoint: str, intent: AIQueryIntent) -> AIQueryAssistantUIPatch:
+    if endpoint == BUILDING_QUERY_ENDPOINT:
+        return AIQueryAssistantUIPatch(
+            primary_view="building_table",
+            chart_type=None,
+            highlighted_filters=[
+                "keyword",
+                "site_id",
+                "primaryspaceusage",
+                "status",
+                "time_range",
+                "min_energy",
+                "max_energy",
+                "min_eui",
+                "max_eui",
+                "min_carbon",
+                "max_carbon",
+                "sort_by",
+                "sort_order",
+            ],
+            suggested_interaction="update_filters_and_refresh",
+        )
     if endpoint == "/energy/trend":
         return AIQueryAssistantUIPatch(
             primary_view="trend_chart",
@@ -457,18 +684,125 @@ def _build_fallback_intent(payload: AIQueryAssistantRequest) -> tuple[AIQueryInt
         AIQueryIntent(
             building_ids=building_ids,
             building_id=building_id,
+            keyword=None,
             site_id=site_id,
+            primaryspaceusage=None,
+            status=None,
             meter=meter,
             time_range=time_range,
+            min_energy=None,
+            max_energy=None,
+            min_eui=None,
+            max_eui=None,
+            min_carbon=None,
+            max_carbon=None,
             granularity=granularity,
             aggregation=aggregation,
             metric=metric,
             order=order,
+            sort_by=None,
+            sort_order=None,
             limit=limit,
             page=page,
             page_size=page_size,
             analysis_mode=analysis_mode,
             include_weather_context=include_weather_context,
+        ),
+        warnings,
+    )
+
+
+def _build_building_query_fallback_intent(payload: AIQueryAssistantRequest) -> tuple[AIQueryIntent, list[str]]:
+    now = _now_with_tz(payload)
+    warnings: list[str] = []
+    keyword, keyword_warnings = _extract_keyword(payload.question)
+    warnings.extend(keyword_warnings)
+    site_id = _extract_site_id(payload.question)
+    primaryspaceusage = _extract_primaryspaceusage(payload.question)
+    status = _extract_status(payload.question)
+    time_range, time_warnings = _resolve_time_range(payload.question, now)
+    warnings.extend(time_warnings)
+    min_energy, max_energy = _extract_metric_range(payload.question, ('总能耗', '能耗', 'energy'))
+    min_eui, max_eui = _extract_metric_range(payload.question, ('eui', '能效', '能耗强度'))
+    min_carbon, max_carbon = _extract_metric_range(payload.question, ('碳排放', 'carbon'))
+    sort_by = _extract_sort_field(payload.question)
+    sort_order = _extract_order(payload.question)
+
+    if (
+        payload.current_filters
+        and payload.current_filters.time_range
+        and any(item == '未明确时间范围，已按最近7天处理。' for item in time_warnings)
+    ):
+        time_range = None
+        warnings = [item for item in warnings if item != '未明确时间范围，已按最近7天处理。']
+
+    (
+        keyword,
+        site_id,
+        primaryspaceusage,
+        status,
+        time_range,
+        min_energy,
+        max_energy,
+        min_eui,
+        max_eui,
+        min_carbon,
+        max_carbon,
+        sort_by,
+        sort_order,
+        merge_warnings,
+    ) = _merge_building_query_with_current_filters(
+        payload,
+        keyword=keyword,
+        site_id=site_id,
+        primaryspaceusage=primaryspaceusage,
+        status=status,
+        time_range=time_range,
+        min_energy=min_energy,
+        max_energy=max_energy,
+        min_eui=min_eui,
+        max_eui=max_eui,
+        min_carbon=min_carbon,
+        max_carbon=max_carbon,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    warnings.extend(merge_warnings)
+
+    if sort_by and sort_order is None:
+        sort_order = 'desc'
+        warnings.append('未明确排序方向，已按降序处理。')
+
+    current_filters = payload.current_filters
+    page = current_filters.page if current_filters else None
+    page_size = current_filters.page_size if current_filters else None
+    return (
+        AIQueryIntent(
+            building_ids=[],
+            building_id=None,
+            keyword=keyword,
+            site_id=site_id,
+            primaryspaceusage=primaryspaceusage,
+            status=status,
+            meter=None,
+            time_range=time_range,
+            min_energy=min_energy,
+            max_energy=max_energy,
+            min_eui=min_eui,
+            max_eui=max_eui,
+            min_carbon=min_carbon,
+            max_carbon=max_carbon,
+            granularity=None,
+            aggregation=None,
+            metric=None,
+            order=None,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=None,
+            page=page,
+            page_size=page_size,
+            analysis_mode=None,
+            include_weather_context=None,
         ),
         warnings,
     )
@@ -494,29 +828,52 @@ def _normalize_llm_result(
     fallback_intent: AIQueryIntent,
     fallback_warnings: list[str],
     settings_model: str,
+    target_scope: str,
 ) -> AIQueryAssistantResponse:
     """将 LLM 输出标准化为 query-assistant 接口响应。"""
     intent_payload = llm_response.get('query_intent') if isinstance(llm_response.get('query_intent'), dict) else {}
     time_range = _normalize_time_range(intent_payload.get('time_range'), fallback_intent.time_range) if fallback_intent.time_range else None
+    normalized_meter = (
+        None
+        if target_scope == "building_query"
+        else normalize_meter(intent_payload.get('meter') or fallback_intent.meter)
+    )
+    normalized_granularity = (
+        None
+        if target_scope == "building_query"
+        else normalize_granularity(intent_payload.get('granularity') or fallback_intent.granularity)
+    )
     intent = AIQueryIntent(
         building_ids=[str(item) for item in intent_payload.get('building_ids', []) if str(item).strip()] or fallback_intent.building_ids,
         building_id=str(intent_payload.get('building_id')).strip() if intent_payload.get('building_id') else fallback_intent.building_id,
+        keyword=str(intent_payload.get('keyword')).strip() if intent_payload.get('keyword') else fallback_intent.keyword,
         site_id=str(intent_payload.get('site_id')).strip() if intent_payload.get('site_id') else fallback_intent.site_id,
-        meter=normalize_meter(intent_payload.get('meter') or fallback_intent.meter),
+        primaryspaceusage=str(intent_payload.get('primaryspaceusage')).strip() if intent_payload.get('primaryspaceusage') else fallback_intent.primaryspaceusage,
+        status=str(intent_payload.get('status')).strip().lower() if intent_payload.get('status') else fallback_intent.status,
+        meter=normalized_meter,
         time_range=time_range or fallback_intent.time_range,
-        granularity=normalize_granularity(intent_payload.get('granularity') or fallback_intent.granularity),
+        min_energy=float(intent_payload.get('min_energy')) if intent_payload.get('min_energy') is not None else fallback_intent.min_energy,
+        max_energy=float(intent_payload.get('max_energy')) if intent_payload.get('max_energy') is not None else fallback_intent.max_energy,
+        min_eui=float(intent_payload.get('min_eui')) if intent_payload.get('min_eui') is not None else fallback_intent.min_eui,
+        max_eui=float(intent_payload.get('max_eui')) if intent_payload.get('max_eui') is not None else fallback_intent.max_eui,
+        min_carbon=float(intent_payload.get('min_carbon')) if intent_payload.get('min_carbon') is not None else fallback_intent.min_carbon,
+        max_carbon=float(intent_payload.get('max_carbon')) if intent_payload.get('max_carbon') is not None else fallback_intent.max_carbon,
+        granularity=normalized_granularity,
         aggregation=str(intent_payload.get('aggregation')).strip() if intent_payload.get('aggregation') else fallback_intent.aggregation,
         metric=str(intent_payload.get('metric')).strip() if intent_payload.get('metric') else fallback_intent.metric,
         order=str(intent_payload.get('order')).strip() if intent_payload.get('order') else fallback_intent.order,
+        sort_by=str(intent_payload.get('sort_by')).strip() if intent_payload.get('sort_by') else fallback_intent.sort_by,
+        sort_order=str(intent_payload.get('sort_order')).strip() if intent_payload.get('sort_order') else fallback_intent.sort_order,
         limit=int(intent_payload.get('limit')) if intent_payload.get('limit') else fallback_intent.limit,
         page=int(intent_payload.get('page')) if intent_payload.get('page') else fallback_intent.page,
         page_size=int(intent_payload.get('page_size')) if intent_payload.get('page_size') else fallback_intent.page_size,
         analysis_mode=str(intent_payload.get('analysis_mode')).strip() if intent_payload.get('analysis_mode') else fallback_intent.analysis_mode,
         include_weather_context=bool(intent_payload.get('include_weather_context')) if 'include_weather_context' in intent_payload else fallback_intent.include_weather_context,
     )
-    endpoint = str(llm_response.get('recommended_endpoint') or _recommend_endpoint('', intent)).strip()
-    if endpoint not in ALLOWED_QUERY_ENDPOINTS:
-        endpoint = _recommend_endpoint('', intent)
+    endpoint = str(llm_response.get('recommended_endpoint') or _recommend_endpoint('', intent, target_scope)).strip()
+    allowed_endpoints = ALLOWED_BUILDING_QUERY_ENDPOINTS if target_scope == "building_query" else ALLOWED_QUERY_ENDPOINTS
+    if endpoint not in allowed_endpoints:
+        endpoint = _recommend_endpoint('', intent, target_scope)
     query_plan = AIQueryAssistantPlan(
         endpoint=endpoint,
         method=_http_method_for_endpoint(endpoint),
@@ -542,9 +899,10 @@ def _build_fallback_response(
     fallback_intent: AIQueryIntent,
     fallback_warnings: list[str],
     settings_model: str,
+    target_scope: str,
 ) -> AIQueryAssistantResponse:
     """在 LLM 失败时返回可解释的规则兜底响应。"""
-    endpoint = _recommend_endpoint(payload.question, fallback_intent)
+    endpoint = _recommend_endpoint(payload.question, fallback_intent, target_scope)
     query_plan = AIQueryAssistantPlan(
         endpoint=endpoint,
         method=_http_method_for_endpoint(endpoint),
@@ -567,8 +925,24 @@ def _build_fallback_response(
 def _should_use_rule_only(payload: AIQueryAssistantRequest, fallback_intent: AIQueryIntent) -> bool:
     """判断当前问题是否足够简单，可直接使用规则结果。"""
 
-    endpoint = _recommend_endpoint(payload.question, fallback_intent)
+    endpoint = _recommend_endpoint(payload.question, fallback_intent, payload.target_scope)
     lowered = payload.question.lower()
+
+    if payload.target_scope == "building_query":
+        complex_markers = (
+            "对比",
+            "比较",
+            "趋势",
+            "排行",
+            "排名",
+            "图",
+            "并且",
+            "同时",
+            "以及",
+        )
+        if any(marker in lowered for marker in complex_markers):
+            return False
+        return True
 
     if endpoint not in {"/energy/query", "/energy/trend"}:
         return False
@@ -601,18 +975,23 @@ def _should_use_rule_only(payload: AIQueryAssistantRequest, fallback_intent: AIQ
 def build_query_intent(payload: AIQueryAssistantRequest) -> AIQueryAssistantResponse:
     """查询助手主入口：将自然语言解析为结构化查询意图。"""
     settings = get_ai_settings()
-    fallback_intent, fallback_warnings = _build_fallback_intent(payload)
+    if payload.target_scope == "building_query":
+        fallback_intent, fallback_warnings = _build_building_query_fallback_intent(payload)
+    else:
+        fallback_intent, fallback_warnings = _build_fallback_intent(payload)
     if _should_use_rule_only(payload, fallback_intent):
         return _build_fallback_response(
             payload=payload,
             fallback_intent=fallback_intent,
             fallback_warnings=fallback_warnings,
             settings_model=settings.llm_model,
+            target_scope=payload.target_scope,
         )
     try:
         system_prompt, user_prompt = build_query_assistant_prompts(
             question=payload.question,
             current_time_iso=_now_with_tz(payload).isoformat(),
+            target_scope=payload.target_scope,
             current_endpoint=payload.current_endpoint,
             current_filters=payload.current_filters.model_dump(mode="json") if payload.current_filters else None,
         )
@@ -625,6 +1004,7 @@ def build_query_intent(payload: AIQueryAssistantRequest) -> AIQueryAssistantResp
             fallback_intent=fallback_intent,
             fallback_warnings=fallback_warnings,
             settings_model=settings.llm_model,
+            target_scope=payload.target_scope,
         )
     except Exception:
         return _build_fallback_response(
@@ -632,4 +1012,5 @@ def build_query_intent(payload: AIQueryAssistantRequest) -> AIQueryAssistantResp
             fallback_intent=fallback_intent,
             fallback_warnings=fallback_warnings,
             settings_model=settings.llm_model,
+            target_scope=payload.target_scope,
         )
