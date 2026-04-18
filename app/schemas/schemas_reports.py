@@ -14,6 +14,7 @@ class ReportType(str, Enum):  # 定义报表类型枚举。
     daily_summary = "daily_summary"  # 每日报表类型。
     weekly_summary = "weekly_summary"  # 周报表类型。
     monthly_summary = "monthly_summary"  # 月报表类型。
+    custom_summary = "custom_summary"  # 自定义时间范围报表类型。
     anomaly_report = "anomaly_report"  # 异常报表类型。
 
 

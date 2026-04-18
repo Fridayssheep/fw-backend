@@ -47,6 +47,7 @@ AI_REPORT_TYPE_MAP = {  # 定义“报表类型”到“AI 报表类型”的映
     "daily_summary": "summary_card",  # 每日报表映射到 AI 摘要卡片类型。
     "weekly_summary": "weekly_summary",  # 周报直接映射到周报类型。
     "monthly_summary": "monthly_summary",  # 月报直接映射到月报类型。
+    "custom_summary": "summary_card",  # 自定义时间范围报表复用通用摘要卡片类型。
     "anomaly_report": "anomaly_brief",  # 异常报表映射到异常简报类型。
 }  # 结束报表类型映射定义。
 
