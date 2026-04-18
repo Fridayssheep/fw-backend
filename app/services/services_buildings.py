@@ -120,7 +120,14 @@ def get_buildings(  # 定义建筑列表查询接口业务函数。
 
     # 4. 编写带聚合筛选的 SQL。这里直接按请求时间窗读取明细表，避免依赖 dashboard 才会刷新的日聚合表。
     sql_base = f"""
-        WITH aggregated_energy AS (
+        WITH active_buildings AS (
+            SELECT DISTINCT
+                mr.building_id
+            FROM meter_readings mr
+            WHERE mr.timestamp >= :start_time
+              AND mr.timestamp <= :end_time
+        ),
+        aggregated_energy AS (
             SELECT 
                 mr.building_id,
                 SUM(mr.meter_reading) as total_energy,
@@ -198,6 +205,7 @@ def get_buildings(  # 定义建筑列表查询接口业务函数。
                     ELSE '正常运行'
                 END AS status_text
             FROM building_metadata bm
+            JOIN active_buildings ab ON bm.building_id = ab.building_id
             LEFT JOIN aggregated_energy ae ON bm.building_id = ae.building_id
             LEFT JOIN building_status_rollup bsr ON bm.building_id = bsr.building_id
             WHERE {where_sql}
