@@ -504,7 +504,12 @@ def get_energy_rankings(  # 定义能耗排行接口业务函数。
     return EnergyRankingResponse(items=ranking_items)  # 返回完整排行响应。
 
 
-def resolve_cop_building_id(building_id: str | None) -> str:  # 定义解析 COP 目标建筑编号的函数。
+def resolve_cop_building_id(  # 定义解析 COP 目标建筑编号的函数。
+    building_id: str | None,  # 接收前端指定的建筑编号。
+    start_time: datetime | str | None = None,  # 接收开始时间，用于默认建筑选择时避免选到当前窗口无数据的楼。
+    end_time: datetime | str | None = None,  # 接收结束时间，用于默认建筑选择时避免选到当前窗口无数据的楼。
+    granularity: str = "day",  # 接收已经标准化的时间粒度，用于判断同一时间桶是否同时有两类表计。
+) -> str:
     if building_id:  # 如果前端明确传了建筑编号，
         building_row = fetch_one(  # 就先校验该建筑是否真实存在。
             """
@@ -517,22 +522,45 @@ def resolve_cop_building_id(building_id: str | None) -> str:  # 定义解析 COP
         if building_row is None:  # 如果数据库里根本没有这栋楼，
             raise ResourceNotFoundError(f"未找到建筑: {building_id}")  # 就抛出统一 404 异常。
         return str(building_row["building_id"])  # 返回已经确认存在的建筑编号。
-    default_row = fetch_one(  # 如果前端没有传建筑，就优先找一栋同时拥有 electricity 和 chilledwater 的建筑。
+    normalized_start = to_db_datetime(start_time)  # 标准化开始时间。
+    normalized_end = to_db_datetime(end_time)  # 标准化结束时间。
+    if normalized_start is not None and normalized_end is not None and normalized_end < normalized_start:  # 如果时间范围非法，
+        raise ValueError("start_time 不能晚于 end_time。")  # 就直接返回清晰错误。
+    time_clauses: list[str] = []  # 初始化默认建筑选择的时间过滤条件。
+    params: dict[str, Any] = {}  # 初始化 SQL 参数。
+    if normalized_start is not None:  # 如果前端传了开始时间，
+        time_clauses.append("timestamp >= :start_time")  # 默认建筑也必须在该窗口内有数据。
+        params["start_time"] = normalized_start  # 写入开始时间参数。
+    if normalized_end is not None:  # 如果前端传了结束时间，
+        time_clauses.append("timestamp <= :end_time")  # 默认建筑也必须在该窗口内有数据。
+        params["end_time"] = normalized_end  # 写入结束时间参数。
+    time_sql = f"AND {' AND '.join(time_clauses)}" if time_clauses else ""  # 生成可选时间过滤 SQL。
+    default_row = fetch_one(  # 如果前端没有传建筑，就优先找当前统计窗口内能形成有效 COP 点位的建筑。
         """
-        SELECT e.building_id AS building_id
-        FROM (
-            SELECT DISTINCT building_id
+        WITH electricity_buckets AS (
+            SELECT building_id, date_trunc(:granularity, timestamp) AS bucket_time
             FROM meter_readings
             WHERE meter = 'electricity'
-        ) e
-        INNER JOIN (
-            SELECT DISTINCT building_id
+              {time_sql}
+            GROUP BY building_id, bucket_time
+        ),
+        chilledwater_buckets AS (
+            SELECT building_id, date_trunc(:granularity, timestamp) AS bucket_time
             FROM meter_readings
             WHERE meter = 'chilledwater'
-        ) c ON c.building_id = e.building_id
-        ORDER BY e.building_id ASC
+              {time_sql}
+            GROUP BY building_id, bucket_time
+        )
+        SELECT e.building_id AS building_id
+        FROM electricity_buckets e
+        INNER JOIN chilledwater_buckets c
+          ON c.building_id = e.building_id
+         AND c.bucket_time = e.bucket_time
+        GROUP BY e.building_id
+        ORDER BY COUNT(*) DESC, e.building_id ASC
         LIMIT 1
-        """,
+        """.format(time_sql=time_sql),
+        {"granularity": granularity, **params},
     )  # 执行默认建筑选择查询。
     if default_row is None:  # 如果连一栋同时有两个表计的建筑都找不到，
         raise ResourceNotFoundError("当前数据库中没有可用于 COP 分析的建筑。")  # 就直接返回明确错误。
@@ -593,8 +621,8 @@ def get_energy_cop(  # 定义 COP 查询接口业务函数。
     end_time: datetime | str | None,  # 接收结束时间。
     granularity: str | None,  # 接收时间粒度。
 ) -> CopAnalysisResponse:  # 返回 COP 响应模型。
-    resolved_building_id = resolve_cop_building_id(building_id)  # 先解析并校验真正要分析的建筑编号。
     normalized_granularity = normalize_granularity(granularity)  # 标准化时间粒度。
+    resolved_building_id = resolve_cop_building_id(building_id, start_time, end_time, normalized_granularity)  # 先解析并校验真正要分析的建筑编号。
     resolved_start, resolved_end, overlap_start, overlap_end, overlap_note = resolve_cop_time_range(resolved_building_id, start_time, end_time)  # 按两个表计的共同可用区间解析最终时间窗。
     rows = fetch_all(  # 查询 electricity 和 chilledwater 两类表计在同一时间桶下的聚合值。
         f"""
