@@ -511,6 +511,14 @@ def build_query_assistant_prompts(
    sort_by, sort_order
 3. 如果用户的问题超出当前页面能力，只保留可落地的筛选条件，并在 warnings 里说明忽略了什么。
 4. 不要返回任何查询结果、解释结果或结论，只返回要修改的筛选方案。
+5. 当前页面筛选是这次解析的默认上下文。如果用户说“再加上”“改成”“切到”“继续看”，表示要在当前筛选上下文里增量修改。
+6. 用户可能会用自然语言表达同一个筛选意图，你要把语义映射成页面可执行字段，例如：
+   “办公楼”-> primaryspaceusage=Office
+   “告警状态”-> status=warning
+   “故障停机”-> status=fault
+   “碳排放高的”-> 可转成 sort_by=carbonEmission, sort_order=desc，或者在有明确阈值时映射到 min_carbon
+   “EUI 偏高”-> 如果没有明确阈值，可优先理解为 sort_by=eui, sort_order=desc，并在 warnings 中说明未给阈值
+7. 如果用户表达的是排序倾向而不是明确阈值，不要强行编造 min/max 数值，优先使用 sort_by + sort_order。
 
 【输出要求】
 1. 只输出一个合法 JSON 对象。
@@ -520,11 +528,17 @@ def build_query_assistant_prompts(
    keyword, site_id, primaryspaceusage, status, time_range,
    min_energy, max_energy, min_eui, max_eui, min_carbon, max_carbon,
    sort_by, sort_order
-4. recommended_endpoint 只能返回 /buildings。
-5. recommended_http_method 一律使用 GET。
-6. 如果无法确定时间范围，可以按最近7天补默认值，但必须在 warnings 中说明。
-7. 如果用户提到了明确建筑 ID 或名称，优先写入 keyword。
-8. 不要返回真实查询结果。
+4. query_intent 字段值必须使用页面可执行的标准值：
+   primaryspaceusage 只能是 Office / Retail / Education / Healthcare / null
+   status 只能是 normal / warning / fault / offline / null
+   sort_by 只能是 eui / totalEnergy / carbonEmission / status / null
+   sort_order 只能是 asc / desc / null
+   time_range 必须是 start/end 的 ISO 8601 时间
+5. recommended_endpoint 只能返回 /buildings。
+6. recommended_http_method 一律使用 GET。
+7. 如果无法确定时间范围，可以按最近7天补默认值，但必须在 warnings 中说明。
+8. 如果用户提到了明确建筑 ID 或名称，优先写入 keyword。
+9. 不要返回真实查询结果。
 
 【输出 JSON 骨架示例】
 {_json_block(output_schema_hint)}

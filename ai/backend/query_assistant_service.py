@@ -71,6 +71,35 @@ BUILDING_QUERY_SORT_FIELDS = {
     'carbonEmission': ('碳排放', 'carbon'),
     'status': ('状态', '系统状态'),
 }
+BUILDING_QUERY_SEMANTIC_MARKERS = (
+    '偏高',
+    '偏低',
+    '较高',
+    '较低',
+    '更高',
+    '更低',
+    '表现差',
+    '表现好',
+    '异常多',
+    '问题多',
+    '耗能高',
+    '耗能低',
+    '费电',
+    '费能',
+    '排除',
+    '除了',
+    '不要',
+    '不看',
+    '优先',
+    '类似',
+    '相关',
+    '这一类',
+    '那一类',
+    '符合',
+    '满足',
+    '帮我找',
+    '想看',
+)
 
 DATE_TOKEN_REGEX = r'(\d{4})(?:[-/.年])(\d{1,2})(?:[-/.月])(\d{1,2})日?'
 DATE_TOKEN_PATTERN = re.compile(DATE_TOKEN_REGEX)
@@ -174,6 +203,93 @@ def _extract_sort_field(question: str) -> str | None:
         if any(keyword.lower() in lowered for keyword in keywords):
             return field
     return None
+
+
+def _normalize_primaryspaceusage(value: Any) -> str | None:
+    if value in (None, ''):
+        return None
+    lowered = str(value).strip().lower()
+    if not lowered:
+        return None
+    for usage, keywords in PRIMARY_SPACE_KEYWORDS.items():
+        if lowered == usage.lower():
+            return usage
+        if any(keyword.lower() == lowered for keyword in keywords):
+            return usage
+        if any(keyword.lower() in lowered for keyword in keywords):
+            return usage
+    return None
+
+
+def _normalize_building_status(value: Any) -> str | None:
+    if value in (None, ''):
+        return None
+    lowered = str(value).strip().lower()
+    if not lowered:
+        return None
+    for status, keywords in BUILDING_STATUS_KEYWORDS.items():
+        if lowered == status:
+            return status
+        if any(keyword.lower() == lowered for keyword in keywords):
+            return status
+        if any(keyword.lower() in lowered for keyword in keywords):
+            return status
+    return None
+
+
+def _normalize_building_query_sort_field(value: Any) -> str | None:
+    if value in (None, ''):
+        return None
+    lowered = str(value).strip().lower()
+    if not lowered:
+        return None
+    for field, keywords in BUILDING_QUERY_SORT_FIELDS.items():
+        if lowered == field.lower():
+            return field
+        if any(keyword.lower() == lowered for keyword in keywords):
+            return field
+        if any(keyword.lower() in lowered for keyword in keywords):
+            return field
+    return None
+
+
+def _normalize_sort_order(value: Any) -> str | None:
+    if value in (None, ''):
+        return None
+    lowered = str(value).strip().lower()
+    if lowered in {'asc', 'ascending'}:
+        return 'asc'
+    if lowered in {'desc', 'descending'}:
+        return 'desc'
+    if any(keyword in lowered for keyword in ('升序', '最低', '最小', '从低到高', '由低到高')):
+        return 'asc'
+    if any(keyword in lowered for keyword in ('降序', '最高', '最大', '从高到低', '由高到低')):
+        return 'desc'
+    return None
+
+
+def _coerce_float(value: Any, fallback: float | None = None) -> float | None:
+    if value in (None, ''):
+        return fallback
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value).replace(',', '').strip())
+    except ValueError:
+        return fallback
+
+
+def _coerce_int(value: Any, fallback: int | None = None) -> int | None:
+    if value in (None, ''):
+        return fallback
+    if isinstance(value, bool):
+        return fallback
+    if isinstance(value, int):
+        return value
+    try:
+        return int(float(str(value).replace(',', '').strip()))
+    except ValueError:
+        return fallback
 
 
 def _extract_metric_range(question: str, keywords: tuple[str, ...]) -> tuple[float | None, float | None]:
@@ -808,6 +924,30 @@ def _build_building_query_fallback_intent(payload: AIQueryAssistantRequest) -> t
     )
 
 
+def _count_building_query_signals(intent: AIQueryIntent) -> int:
+    signal_fields = (
+        intent.keyword,
+        intent.site_id,
+        intent.primaryspaceusage,
+        intent.status,
+        intent.time_range,
+        intent.min_energy,
+        intent.max_energy,
+        intent.min_eui,
+        intent.max_eui,
+        intent.min_carbon,
+        intent.max_carbon,
+        intent.sort_by,
+        intent.sort_order,
+    )
+    return sum(1 for item in signal_fields if item not in (None, '', [], {}))
+
+
+def _contains_building_query_semantic_markers(question: str) -> bool:
+    lowered = question.lower()
+    return any(marker in lowered for marker in BUILDING_QUERY_SEMANTIC_MARKERS)
+
+
 def _normalize_time_range(value: Any, fallback_value: TimeRange) -> TimeRange:
     if not isinstance(value, dict):
         return fallback_value
@@ -843,30 +983,50 @@ def _normalize_llm_result(
         if target_scope == "building_query"
         else normalize_granularity(intent_payload.get('granularity') or fallback_intent.granularity)
     )
+    normalized_primaryspaceusage = (
+        _normalize_primaryspaceusage(intent_payload.get('primaryspaceusage'))
+        if target_scope == "building_query"
+        else str(intent_payload.get('primaryspaceusage')).strip() if intent_payload.get('primaryspaceusage') else fallback_intent.primaryspaceusage
+    )
+    normalized_status = (
+        _normalize_building_status(intent_payload.get('status'))
+        if target_scope == "building_query"
+        else str(intent_payload.get('status')).strip().lower() if intent_payload.get('status') else fallback_intent.status
+    )
+    normalized_sort_by = (
+        _normalize_building_query_sort_field(intent_payload.get('sort_by'))
+        if target_scope == "building_query"
+        else str(intent_payload.get('sort_by')).strip() if intent_payload.get('sort_by') else fallback_intent.sort_by
+    )
+    normalized_sort_order = (
+        _normalize_sort_order(intent_payload.get('sort_order'))
+        if target_scope == "building_query"
+        else str(intent_payload.get('sort_order')).strip() if intent_payload.get('sort_order') else fallback_intent.sort_order
+    )
     intent = AIQueryIntent(
         building_ids=[str(item) for item in intent_payload.get('building_ids', []) if str(item).strip()] or fallback_intent.building_ids,
         building_id=str(intent_payload.get('building_id')).strip() if intent_payload.get('building_id') else fallback_intent.building_id,
         keyword=str(intent_payload.get('keyword')).strip() if intent_payload.get('keyword') else fallback_intent.keyword,
         site_id=str(intent_payload.get('site_id')).strip() if intent_payload.get('site_id') else fallback_intent.site_id,
-        primaryspaceusage=str(intent_payload.get('primaryspaceusage')).strip() if intent_payload.get('primaryspaceusage') else fallback_intent.primaryspaceusage,
-        status=str(intent_payload.get('status')).strip().lower() if intent_payload.get('status') else fallback_intent.status,
+        primaryspaceusage=normalized_primaryspaceusage or fallback_intent.primaryspaceusage,
+        status=normalized_status or fallback_intent.status,
         meter=normalized_meter,
         time_range=time_range or fallback_intent.time_range,
-        min_energy=float(intent_payload.get('min_energy')) if intent_payload.get('min_energy') is not None else fallback_intent.min_energy,
-        max_energy=float(intent_payload.get('max_energy')) if intent_payload.get('max_energy') is not None else fallback_intent.max_energy,
-        min_eui=float(intent_payload.get('min_eui')) if intent_payload.get('min_eui') is not None else fallback_intent.min_eui,
-        max_eui=float(intent_payload.get('max_eui')) if intent_payload.get('max_eui') is not None else fallback_intent.max_eui,
-        min_carbon=float(intent_payload.get('min_carbon')) if intent_payload.get('min_carbon') is not None else fallback_intent.min_carbon,
-        max_carbon=float(intent_payload.get('max_carbon')) if intent_payload.get('max_carbon') is not None else fallback_intent.max_carbon,
+        min_energy=_coerce_float(intent_payload.get('min_energy'), fallback_intent.min_energy),
+        max_energy=_coerce_float(intent_payload.get('max_energy'), fallback_intent.max_energy),
+        min_eui=_coerce_float(intent_payload.get('min_eui'), fallback_intent.min_eui),
+        max_eui=_coerce_float(intent_payload.get('max_eui'), fallback_intent.max_eui),
+        min_carbon=_coerce_float(intent_payload.get('min_carbon'), fallback_intent.min_carbon),
+        max_carbon=_coerce_float(intent_payload.get('max_carbon'), fallback_intent.max_carbon),
         granularity=normalized_granularity,
         aggregation=str(intent_payload.get('aggregation')).strip() if intent_payload.get('aggregation') else fallback_intent.aggregation,
         metric=str(intent_payload.get('metric')).strip() if intent_payload.get('metric') else fallback_intent.metric,
         order=str(intent_payload.get('order')).strip() if intent_payload.get('order') else fallback_intent.order,
-        sort_by=str(intent_payload.get('sort_by')).strip() if intent_payload.get('sort_by') else fallback_intent.sort_by,
-        sort_order=str(intent_payload.get('sort_order')).strip() if intent_payload.get('sort_order') else fallback_intent.sort_order,
-        limit=int(intent_payload.get('limit')) if intent_payload.get('limit') else fallback_intent.limit,
-        page=int(intent_payload.get('page')) if intent_payload.get('page') else fallback_intent.page,
-        page_size=int(intent_payload.get('page_size')) if intent_payload.get('page_size') else fallback_intent.page_size,
+        sort_by=normalized_sort_by or fallback_intent.sort_by,
+        sort_order=normalized_sort_order or fallback_intent.sort_order,
+        limit=_coerce_int(intent_payload.get('limit'), fallback_intent.limit),
+        page=_coerce_int(intent_payload.get('page'), fallback_intent.page),
+        page_size=_coerce_int(intent_payload.get('page_size'), fallback_intent.page_size),
         analysis_mode=str(intent_payload.get('analysis_mode')).strip() if intent_payload.get('analysis_mode') else fallback_intent.analysis_mode,
         include_weather_context=bool(intent_payload.get('include_weather_context')) if 'include_weather_context' in intent_payload else fallback_intent.include_weather_context,
     )
@@ -942,6 +1102,21 @@ def _should_use_rule_only(payload: AIQueryAssistantRequest, fallback_intent: AIQ
         )
         if any(marker in lowered for marker in complex_markers):
             return False
+        if _contains_building_query_semantic_markers(lowered):
+            return False
+
+        signal_count = _count_building_query_signals(fallback_intent)
+        question_length = len(payload.question.strip())
+
+        if signal_count == 0:
+            return False
+
+        if signal_count == 1:
+            return question_length <= 18
+
+        if signal_count == 2:
+            return question_length <= 32
+
         return True
 
     if endpoint not in {"/energy/query", "/energy/trend"}:
