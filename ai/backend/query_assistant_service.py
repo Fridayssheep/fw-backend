@@ -44,6 +44,7 @@ ALLOWED_QUERY_ENDPOINTS = {
 }
 BUILDING_QUERY_ENDPOINT = '/buildings'
 ALLOWED_BUILDING_QUERY_ENDPOINTS = {BUILDING_QUERY_ENDPOINT}
+QUERY_ASSISTANT_LLM_TIMEOUT_SECONDS = 100.0
 
 METER_KEYWORDS = {
     'electricity': ('电耗', '电能', '用电', '电量', 'electricity', 'power'),
@@ -1096,9 +1097,6 @@ def _should_use_rule_only(payload: AIQueryAssistantRequest, fallback_intent: AIQ
             "排行",
             "排名",
             "图",
-            "并且",
-            "同时",
-            "以及",
         )
         if any(marker in lowered for marker in complex_markers):
             return False
@@ -1106,18 +1104,10 @@ def _should_use_rule_only(payload: AIQueryAssistantRequest, fallback_intent: AIQ
             return False
 
         signal_count = _count_building_query_signals(fallback_intent)
-        question_length = len(payload.question.strip())
-
-        if signal_count == 0:
-            return False
-
-        if signal_count == 1:
-            return question_length <= 18
-
-        if signal_count == 2:
-            return question_length <= 32
-
-        return True
+        # Building-query is a filter builder, not an open-ended QA surface.
+        # If deterministic rules already extracted filters, do not call the LLM
+        # just because the user used a long building ID or an explicit date range.
+        return signal_count > 0
 
     if endpoint not in {"/energy/query", "/energy/trend"}:
         return False
@@ -1173,6 +1163,7 @@ def build_query_intent(payload: AIQueryAssistantRequest) -> AIQueryAssistantResp
         llm_response = OpenAICompatibleClient(settings).generate_json(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            timeout_seconds=min(settings.llm_timeout_seconds, QUERY_ASSISTANT_LLM_TIMEOUT_SECONDS),
         )
         return _normalize_llm_result(
             llm_response=llm_response,

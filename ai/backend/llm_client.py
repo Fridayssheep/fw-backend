@@ -39,7 +39,7 @@ class OpenAICompatibleClient:
             return stripped[first_object:last_object + 1]
         return stripped
 
-    def generate_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    def generate_json(self, system_prompt: str, user_prompt: str, timeout_seconds: float | None = None) -> dict[str, Any]:
         """调用 LLM 并返回反序列化后的 JSON 对象。"""
         payload = {
             'model': self._settings.llm_model,
@@ -55,7 +55,7 @@ class OpenAICompatibleClient:
             'Authorization': f'Bearer {self._settings.llm_api_key}',
             'Content-Type': 'application/json',
         }
-        with httpx.Client(timeout=self._settings.llm_timeout_seconds, trust_env=False) as client:
+        with httpx.Client(timeout=timeout_seconds or self._settings.llm_timeout_seconds, trust_env=False) as client:
             response = client.post(
                 f"{self._settings.llm_base_url}/chat/completions",
                 json=payload,
@@ -71,4 +71,3 @@ class OpenAICompatibleClient:
             return json.loads(json_text)
         except json.JSONDecodeError as exc:
             raise ValueError('LLM service did not return valid JSON content') from exc
-
